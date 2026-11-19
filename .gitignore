@@ -1,0 +1,18 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+
+# ── 학습 산출물 (용량이 커서 올리지 않음) ──
+logs/
+*.pt
+*.pth
+
+# ── Hydra 실행 기록 (train.py·play.py 실행 위치에 생김, 로컬 절대 경로가 들어감) ──
+outputs/
+
+# ── 포트폴리오용 GIF·영상 ──
+portfolio/
+
+# ── 에디터 ──
+.vscode/
+.idea/
