@@ -352,3 +352,52 @@ class G1CarryGaitFlatEnvCfg_RECORD(G1CarryGaitFlatEnvCfg_PLAY):
     def __post_init__(self):
         super().__post_init__()
         _apply_record_settings(self)
+
+
+# ===========================================================================
+# 팔이 움직여도 버티는 걷기·서기 (Humanoid-G1-Carry-Gait-ArmRand-Flat-v0, arm_rand 브랜치)
+# 12차 설정(G1CarryGaitFlatEnvCfg)에 '어깨·팔꿈치 목표 자세 무작위화' 이벤트만 더함.
+# 관측·동작 크기는 그대로 → 12차 체크포인트에서 이어 학습
+# ===========================================================================
+
+# 무작위 범위 (rad). 2026-11-20 inspect 로 확인한 손 위치는 CLAUDE.md "팔 무작위 범위" 참고
+ARM_RAND_SHOULDER_PITCH = (-1.2, 0.3)  # 음수 = 팔이 앞으로. 짐 든 자세 -0.5
+ARM_RAND_ELBOW_PITCH = (0.3, 1.5)  # 짐 든 자세 1.0
+
+
+@configclass
+class ArmRandEventCfg(CarryEventCfg):
+    # 매 스텝 부르는 interval 이벤트 (환경별 2~5초 간격은 이벤트 클래스가 따로 셈)
+    arm_motion = EventTerm(
+        func=carry_mdp.randomize_arm_targets,
+        mode="interval",
+        interval_range_s=(0.0, 0.0),
+        is_global_time=True,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "change_interval_s": (2.0, 5.0),
+            "random_prob": 0.5,  # 새 목표를 정할 때 절반은 무작위 자세, 절반은 짐 든 자세로 돌아감
+            "symmetric_prob": 0.5,  # 무작위 자세 중 절반은 양팔 같은 자세 (상자 집기)
+            "shoulder_range": ARM_RAND_SHOULDER_PITCH,
+            "elbow_range": ARM_RAND_ELBOW_PITCH,
+            "max_speed": 2.0,  # rad/s, 어깨 범위 1.5 rad 를 약 0.75초에 지나감
+        },
+    )
+
+
+@configclass
+class G1CarryGaitArmRandFlatEnvCfg(G1CarryGaitFlatEnvCfg):
+    events: ArmRandEventCfg = ArmRandEventCfg()
+
+
+@configclass
+class G1CarryGaitArmRandFlatEnvCfg_PLAY(G1CarryGaitArmRandFlatEnvCfg):
+    """영상 확인용 (G1CarryFlatEnvCfg_PLAY 와 같은 변경). 팔 무작위 움직임은 켜 둠."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+        self.events.base_external_force_torque = None
+        self.events.push_robot = None

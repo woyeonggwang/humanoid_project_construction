@@ -72,3 +72,26 @@ gym.register(
         "rsl_rl_cfg_entry_point": _GAIT_AGENT_CFG,
     },
 )
+
+# 팔이 움직여도 버티는 걷기·서기 (12차 설정 + 어깨·팔꿈치 목표 자세 무작위화)
+_ARMRAND_AGENT_CFG = "humanoid_tasks.g1_carry.agents:G1CarryGaitArmRandFlatPPORunnerCfg"
+
+gym.register(
+    id="Humanoid-G1-Carry-Gait-ArmRand-Flat-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_ENV_CFG}:G1CarryGaitArmRandFlatEnvCfg",
+        "rsl_rl_cfg_entry_point": _ARMRAND_AGENT_CFG,
+    },
+)
+
+gym.register(
+    id="Humanoid-G1-Carry-Gait-ArmRand-Flat-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_ENV_CFG}:G1CarryGaitArmRandFlatEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": _ARMRAND_AGENT_CFG,
+    },
+)

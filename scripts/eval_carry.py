@@ -21,6 +21,9 @@
 - 손 무게: 시나리오 × 구간마다 같은 수의 환경. 구간 안에서 무작위, 양손 같은 무게 (상자를 드는 상황)
   학습 때의 무게 무작위화(add_hand_mass)는 끄고 같은 방식(질량 + 관성 비율)으로 직접 넣음
 - 흔들림·손 위치 통계는 에피소드 시작 후 --warmup 스텝(처음 처지는 구간)을 뺀다. 넘어짐은 전체 구간
+- --arm_motion: 어깨·팔꿈치 pitch 목표값을 미리 정한 순서로 움직임 (팔 무작위 움직임판 학습 이벤트와 같은 규칙·범위·속도,
+  난수는 --seed 로 고정 → 어느 정책이든 같은 팔 움직임). 학습 과제에 팔 무작위 이벤트가 있어도 평가에서는 끄고 이 순서를 씀
+  이때 팔 처짐·흔들림·손 위치 값은 일부러 움직인 몫이 섞이므로 의미 없음 (넘어짐·속도·걸음·자세 지표를 봄)
 
 예) python -u scripts\\eval_carry.py --headless --load_run 2026-11-19_17-33-52
 """
@@ -41,6 +44,7 @@ parser.add_argument("--per_cell", type=int, default=50, help="시나리오 × �
 parser.add_argument("--steps", type=int, default=1000, help="진행 스텝 수 (50스텝 = 1초, 에피소드 최대 1000)")
 parser.add_argument("--warmup", type=int, default=50, help="에피소드 시작 후 흔들림 통계에서 뺄 스텝 수")
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--arm_motion", action="store_true", default=False, help="어깨·팔꿈치 목표값을 무작위 순서로 움직임")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -87,6 +91,8 @@ cmd_cfg.resampling_time_range = (1.0e6, 1.0e6)
 if hasattr(cmd_cfg, "rel_turn_envs"):  # 걸음 보상 추가판의 제자리 회전 명령 섞기도 끔 (명령은 아래에서 고정)
     cmd_cfg.rel_turn_envs = 0.0
 cmd_cfg.debug_vis = False
+if hasattr(env_cfg.events, "arm_motion"):  # 팔 무작위 움직임판의 학습 이벤트는 끄고, 필요하면 아래 고정 순서를 씀
+    env_cfg.events.arm_motion = None
 
 agent_cfg = load_cfg_from_registry(args_cli.task, "rsl_rl_cfg_entry_point")
 log_root = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
@@ -133,6 +139,36 @@ print(f"[eval] 손 질량 확인: 최소 {check.min().item():.3f} kg, 최대 {ch
 # 명령 고정
 cmd_term = unwrapped.command_manager.get_term("base_velocity")
 target_cmd = torch.tensor([c for _, c in SCENARIOS], device=device)[scen_of_env.to(device)]
+
+# 팔 움직임 순서 (--arm_motion): 학습 이벤트(carry_mdp.randomize_arm_targets)와 같은 규칙을 CPU 난수로 미리 계산
+from humanoid_tasks.g1_carry import carry_mdp  # noqa: E402
+from humanoid_tasks.g1_carry.env_cfg import ArmRandEventCfg  # noqa: E402
+
+arm_target_ids = [robot.joint_names.index(n) for n in carry_mdp.ARM_TARGET_JOINTS]
+arm_sched = None
+if args_cli.arm_motion:
+    ap = ArmRandEventCfg().arm_motion.params
+    ga = torch.Generator().manual_seed(args_cli.seed + 1)
+    carry = robot.data.default_joint_pos[:, arm_target_ids].cpu()
+    cur, goal = carry.clone(), carry.clone()
+    lo_i, hi_i = ap["change_interval_s"]
+    t_left = lo_i + (hi_i - lo_i) * torch.rand(num_envs, generator=ga)
+    sched = torch.zeros(args_cli.steps, num_envs, len(arm_target_ids))
+    for t in range(args_cli.steps):
+        t_left -= unwrapped.step_dt
+        due = (t_left <= 0.0).nonzero().flatten()
+        if len(due) > 0:
+            u = torch.rand(len(due), 6, generator=ga)
+            goal[due] = carry_mdp.arm_goal_from_uniform(
+                u, carry[due], ap["shoulder_range"], ap["elbow_range"], ap["random_prob"], ap["symmetric_prob"]
+            )
+            t_left[due] = lo_i + (hi_i - lo_i) * torch.rand(len(due), generator=ga)
+        cur = carry_mdp.step_toward(cur, goal, ap["max_speed"] * unwrapped.step_dt)
+        sched[t] = cur
+    arm_sched = sched.to(device)
+    moved = ((sched - carry[None]).abs() > 0.05).any(dim=-1).float().mean().item()
+    print(f"[eval] 팔 움직임 순서: 간격 {ap['change_interval_s']}초, 무작위 비율 {ap['random_prob']}, 어깨 {ap['shoulder_range']}, "
+          f"팔꿈치 {ap['elbow_range']}, 속도 {ap['max_speed']} rad/s → 짐 든 자세에서 벗어난 시간 비율 {moved * 100:.1f}%")
 
 # 기록할 관절·링크
 joint_ids = [robot.joint_names.index(f"{s}_{j}_joint") for s in SIDES for j in ARM_JOINTS]  # (좌 5, 우 5)
@@ -214,6 +250,8 @@ obs = env.get_observations()
 with torch.inference_mode():
     for t in range(T):
         actions = policy(obs)
+        if arm_sched is not None:
+            robot.set_joint_position_target(arm_sched[t], joint_ids=arm_target_ids)
         obs, _, dones, _ = env.step(actions)
         terminated = unwrapped.termination_manager.terminated
         falls += terminated.long()
@@ -616,7 +654,7 @@ for s in range(n_scen):
     print(f"{SCENARIOS[s][0]:16s} " + " ".join(f"{c:>20s}" for c in cells))
 
 # 환경별 원자료 저장 (학습 폴더, git 제외)
-out_csv = os.path.join(os.path.dirname(resume_path), "eval_carry.csv")
+out_csv = os.path.join(os.path.dirname(resume_path), "eval_carry_armmotion.csv" if args_cli.arm_motion else "eval_carry.csv")
 with open(out_csv, "w", newline="", encoding="utf-8") as f:
     w = csv.writer(f)
     w.writerow(["env", "scenario", "added_mass_kg", "falls", "lin_err", "yaw_err", "vx", "wz"]

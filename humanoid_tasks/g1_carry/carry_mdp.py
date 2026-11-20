@@ -226,3 +226,105 @@ def feet_slip(
     contact = feet_contact(env, sensor_cfg).float()
     speed_sq = torch.sum(torch.square(asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2]), dim=-1)
     return torch.sum(torch.clamp(speed_sq, max=max_speed**2) * contact, dim=1)
+
+
+# ---------------------------------------------------------------------------
+# 팔 목표 자세 무작위화 (팔이 움직여도 버티는 걷기·서기, arm_rand)
+# ---------------------------------------------------------------------------
+
+# 무작위로 바꾸는 관절 순서: [왼 어깨 pitch, 오른 어깨 pitch, 왼 팔꿈치 pitch, 오른 팔꿈치 pitch]
+ARM_TARGET_JOINTS = [
+    "left_shoulder_pitch_joint",
+    "right_shoulder_pitch_joint",
+    "left_elbow_pitch_joint",
+    "right_elbow_pitch_joint",
+]
+
+
+def arm_goal_from_uniform(
+    u: torch.Tensor,
+    carry: torch.Tensor,
+    shoulder_range: tuple[float, float],
+    elbow_range: tuple[float, float],
+    random_prob: float,
+    symmetric_prob: float,
+) -> torch.Tensor:
+    """0~1 균일 난수 u (n, 6) → 팔 목표 자세 (n, 4), 순서는 ARM_TARGET_JOINTS.
+
+    - u[:, 0] < random_prob 이면 무작위 자세, 아니면 짐 든 자세(carry, (n, 4))로 돌아감
+    - u[:, 1] < symmetric_prob 이면 양팔 같은 자세 (상자를 양손으로 드는 경우), 아니면 좌우 따로
+    - u[:, 2:4] = 왼팔 (어깨, 팔꿈치), u[:, 4:6] = 오른팔
+    학습 이벤트(randomize_arm_targets)와 평가 스크립트(eval_carry.py --arm_motion)가 같은 규칙을 쓰도록 함수로 둠.
+    """
+    s_lo, s_hi = shoulder_range
+    e_lo, e_hi = elbow_range
+    left_s = s_lo + (s_hi - s_lo) * u[:, 2]
+    left_e = e_lo + (e_hi - e_lo) * u[:, 3]
+    sym = u[:, 1] < symmetric_prob
+    right_s = torch.where(sym, left_s, s_lo + (s_hi - s_lo) * u[:, 4])
+    right_e = torch.where(sym, left_e, e_lo + (e_hi - e_lo) * u[:, 5])
+    rand_goal = torch.stack([left_s, right_s, left_e, right_e], dim=1)
+    return torch.where((u[:, 0] < random_prob)[:, None], rand_goal, carry)
+
+
+def step_toward(current: torch.Tensor, goal: torch.Tensor, max_step: float) -> torch.Tensor:
+    """current 를 goal 쪽으로 한 스텝에 최대 max_step 만큼 옮긴 값 (관절 목표값이 순간 이동하지 않게)."""
+    return current + torch.clamp(goal - current, -max_step, max_step)
+
+
+class randomize_arm_targets(ManagerTermBase):
+    """interval 이벤트 (매 스텝 호출): 어깨·팔꿈치 pitch 의 모터 목표값을 무작위 자세로 옮긴다.
+
+    - 환경마다 change_interval_s 범위(초)에서 뽑은 간격으로 새 목표 자세를 정함
+      (random_prob 확률로 무작위 자세, 나머지는 짐 든 자세로 돌아감)
+    - 목표값은 한 번에 바꾸지 않고 max_speed(rad/s) 로 옮김 (IK 로 팔을 내리는 동작처럼 연속으로 움직이게)
+    - 리셋되면 짐 든 자세에서 다시 시작 (리셋 이벤트 hold_arms 가 넣는 목표값과 같음)
+    매 스텝 목표값을 직접 옮겨야 하므로 interval_range_s=(0, 0), is_global_time=True 로 등록해 매 스텝 부르고,
+    환경별 간격은 이 클래스가 따로 센다.
+    """
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.asset = env.scene[cfg.params["asset_cfg"].name]
+        self.joint_ids, _ = self.asset.find_joints(ARM_TARGET_JOINTS, preserve_order=True)
+        self.carry = self.asset.data.default_joint_pos[:, self.joint_ids].clone()  # (N, 4) 짐 든 자세
+        self.goal = self.carry.clone()
+        self.current = self.carry.clone()
+        self.time_left = self._sample_interval(env.num_envs, cfg.params["change_interval_s"])
+
+    def _sample_interval(self, n: int, interval: tuple[float, float]) -> torch.Tensor:
+        lo, hi = interval
+        return lo + (hi - lo) * torch.rand(n, device=self.device)
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = slice(None)
+            n = self.num_envs
+        else:
+            n = len(env_ids)
+        self.goal[env_ids] = self.carry[env_ids]
+        self.current[env_ids] = self.carry[env_ids]
+        self.time_left[env_ids] = self._sample_interval(n, self.cfg.params["change_interval_s"])
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        env_ids: torch.Tensor | None,
+        asset_cfg: SceneEntityCfg,
+        change_interval_s: tuple[float, float],
+        random_prob: float,
+        symmetric_prob: float,
+        shoulder_range: tuple[float, float],
+        elbow_range: tuple[float, float],
+        max_speed: float,
+    ):
+        self.time_left -= env.step_dt
+        due = (self.time_left <= 0.0).nonzero().flatten()
+        if len(due) > 0:
+            u = torch.rand(len(due), 6, device=self.device)
+            self.goal[due] = arm_goal_from_uniform(
+                u, self.carry[due], shoulder_range, elbow_range, random_prob, symmetric_prob
+            )
+            self.time_left[due] = self._sample_interval(len(due), change_interval_s)
+        self.current = step_toward(self.current, self.goal, max_speed * env.step_dt)
+        self.asset.set_joint_position_target(self.current, joint_ids=self.joint_ids)

@@ -20,3 +20,15 @@ class G1CarryGaitFlatPPORunnerCfg(G1FlatPPORunnerCfg):
     def __post_init__(self):
         super().__post_init__()
         self.experiment_name = "g1_carry_gait_flat"
+
+
+@configclass
+class G1CarryGaitArmRandFlatPPORunnerCfg(G1FlatPPORunnerCfg):
+    """팔 무작위 움직임판. 12차 체크포인트(g1_carry_gait_flat 폴더)에서 --resume 으로 이어 학습하려고
+    기록 폴더는 걸음 보상 추가판과 같게 두고, 실행 폴더 이름 끝에 '_armrand' 를 붙여 구분한다
+    (원본 train.py 는 experiment_name 폴더 안에서만 --load_run 을 찾음)."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "g1_carry_gait_flat"
+        self.run_name = "armrand"

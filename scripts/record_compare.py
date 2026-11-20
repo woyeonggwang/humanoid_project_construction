@@ -58,6 +58,8 @@ cmd_cfg.rel_standing_envs = 0.0
 cmd_cfg.resampling_time_range = (1.0e6, 1.0e6)
 if hasattr(cmd_cfg, "rel_turn_envs"):
     cmd_cfg.rel_turn_envs = 0.0
+if hasattr(env_cfg.events, "arm_motion"):  # 팔 무작위 움직임판도 비교 영상에서는 짐 든 자세로
+    env_cfg.events.arm_motion = None
 
 agent_cfg = load_cfg_from_registry(args_cli.task, "rsl_rl_cfg_entry_point")
 log_root = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))
