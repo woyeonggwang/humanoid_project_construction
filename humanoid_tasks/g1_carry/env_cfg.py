@@ -391,8 +391,21 @@ class ArmRandEventCfg(CarryEventCfg):
 
 
 @configclass
+class ArmRandRewardsCfg(GaitRewardsCfg):
+    # 서 있을 때 무게중심을 발 가운데로 (3차, 2026-11-20): 2차는 팔을 아래·뒤로 내린 채 서 있으면
+    # 무게중심이 발목보다 최대 6cm 뒤로 가서 뒤로 넘어짐. 발목보다 2~8cm 앞을 벗어난 거리(m)에 벌점
+    stand_com = RewTerm(
+        func=carry_mdp.stand_com_range,
+        weight=-20.0,
+        params={"command_name": "base_velocity", "stand_threshold": 0.1, "min_x": 0.02, "max_x": 0.08,
+                "asset_cfg": FEET_ASSET},
+    )
+
+
+@configclass
 class G1CarryGaitArmRandFlatEnvCfg(G1CarryGaitFlatEnvCfg):
     events: ArmRandEventCfg = ArmRandEventCfg()
+    rewards: ArmRandRewardsCfg = ArmRandRewardsCfg()
 
 
 @configclass

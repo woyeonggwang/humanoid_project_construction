@@ -335,3 +335,37 @@ class randomize_arm_targets(ManagerTermBase):
             self.time_left[due] = self._sample_interval(len(due), change_interval_s)
         self.current = step_toward(self.current, self.goal, max_speed * env.step_dt)
         self.asset.set_joint_position_target(self.current, joint_ids=self.joint_ids)
+
+
+class stand_com_range(ManagerTermBase):
+    """벌점: 정지 명령일 때 몸 전체 무게중심이 양 발목 가운데보다 진행 방향으로 [min_x, max_x](m) 밖이면 벗어난 거리.
+
+    팔 무작위판 2차는 팔을 아래·뒤로 내린 채 서 있으면 무게중심이 발목보다 최대 6cm 뒤로 가서 뒤로 넘어짐
+    (가만히 서 있을 때도 무게중심이 발목 바로 위, 2026-11-20 eval_carry.py 진단). 발바닥은 발목보다 앞쪽이 길므로
+    무게중심을 발목보다 조금 앞에 두게 한다.
+    질량은 시작 이벤트(손 무게 무작위화)가 보상 관리자보다 늦게 실행되므로 첫 호출 때 읽어 둔다 (원본 코드로 확인).
+    asset_cfg 의 body_names 는 [왼발, 오른발] 발 링크.
+    """
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.mass = None
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        stand_threshold: float,
+        min_x: float,
+        max_x: float,
+        asset_cfg: SceneEntityCfg,
+    ) -> torch.Tensor:
+        asset = env.scene[asset_cfg.name]
+        if self.mass is None:
+            self.mass = asset.root_physx_view.get_masses().to(env.device)
+        com = (asset.data.body_com_pos_w * self.mass[..., None]).sum(dim=1) / self.mass.sum(dim=1, keepdim=True)
+        mid = asset.data.body_pos_w[:, asset_cfg.body_ids, :2].mean(dim=1)
+        yaw = asset.data.heading_w
+        x = (com[:, 0] - mid[:, 0]) * torch.cos(yaw) + (com[:, 1] - mid[:, 1]) * torch.sin(yaw)
+        excess = torch.clamp(min_x - x, min=0.0) + torch.clamp(x - max_x, min=0.0)
+        return excess * is_standing_command(env, command_name, stand_threshold).float()

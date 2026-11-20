@@ -227,6 +227,10 @@ sepx_hist = torch.zeros(T, N, device=device)  # 골반 기준 앞뒤 발 간격 
 footxy_hist = torch.zeros(T, N, 2, 2, device=device)  # 발 수평 위치 (닿은 채 미끄러진 거리 계산용)
 heading_hist = torch.zeros(T, N, 2, device=device)  # 골반이 향하는 방향 단위 벡터
 fall_step = torch.full((N,), -1, dtype=torch.long, device=device)  # 처음 넘어진 시점 (에피소드 스텝)
+fall_t = torch.full((N,), -1, dtype=torch.long, device=device)  # 처음 넘어진 시점 (평가 시작 후 스텝)
+# 몸 전체 무게중심: 링크별 질량(손 무게 포함)으로 가중 평균. 발목(ankle_roll_link) 가운데 기준 진행 방향 앞뒤 거리
+body_mass = view.get_masses().to(device)  # (N, 링크 수), 시작 후 바뀌지 않음
+com_hist = torch.zeros(T, N, device=device)
 fall_pitch = torch.zeros(N, device=device)  # 넘어지기 한 스텝 전 기울기
 fall_roll = torch.zeros(N, device=device)
 prev_len = unwrapped.episode_length_buf.clone()
@@ -258,6 +262,7 @@ with torch.inference_mode():
         falls += terminated.long()
         new_fall = terminated & (fall_step < 0)
         fall_step = torch.where(new_fall, prev_len + 1, fall_step)
+        fall_t = torch.where(new_fall, torch.full_like(fall_t, t), fall_t)
         fall_pitch = torch.where(new_fall, prev_pitch, fall_pitch)
         fall_roll = torch.where(new_fall, prev_roll, fall_roll)
         # 명령을 시나리오 값으로 되돌리고 관측을 다시 계산 (리셋된 환경은 명령이 다시 뽑혔으므로)
@@ -323,6 +328,9 @@ with torch.inference_mode():
         footxy_hist[t] = robot.data.body_pos_w[:, foot_body_ids, :2]
         yaw = robot.data.heading_w
         heading_hist[t] = torch.stack([torch.cos(yaw), torch.sin(yaw)], dim=1)
+        com = (robot.data.body_com_pos_w * body_mass[..., None]).sum(dim=1) / body_mass.sum(dim=1, keepdim=True)
+        feet_mid = robot.data.body_pos_w[:, foot_body_ids, :2].mean(dim=1)
+        com_hist[t] = ((com[:, :2] - feet_mid) * heading_hist[t]).sum(dim=1)
         rew_sum += reward_manager._step_reward * v[:, None]
         prev_len = unwrapped.episode_length_buf.clone()
         prev_pitch, prev_roll = pitch, roll
@@ -604,6 +612,45 @@ for s in range(n_scen):
     print(f"{SCENARIOS[s][0]:16s} {int(sel.sum()):3d}개 | 0~2초 {hist[0]}, 2~5초 {hist[1]}, 5~10초 {hist[2]}, 10~15초 {hist[3]}, 15초~ {hist[4]} "
           f"| 직전 앞뒤 기울기 평균 {fall_pitch_c[sel].mean():+.1f}° (앞으로 {int((fall_pitch_c[sel] > 0).sum())}, 뒤로 {int((fall_pitch_c[sel] < 0).sum())}), "
           f"좌우 |기울기| 평균 {fall_roll_c[sel].abs().mean():.1f}°")
+
+# ---- 몸 전체 무게중심 (발목 가운데 기준 앞뒤, + 앞) ----
+print("\n========== 몸 전체 무게중심: 양 발목(ankle_roll_link) 가운데 기준 진행 방향 앞뒤 거리 (cm, + 앞, 유효 스텝) ==========")
+print(f"{'구분':16s} {'평균':>7s} {'std':>6s} {'하위 5%':>8s} {'상위 5%':>8s}")
+com_valid = torch.where(mask_hist, com_hist, torch.full_like(com_hist, float("nan"))) * 100
+
+
+def print_com(name: str, sel: torch.Tensor):
+    x = com_valid[:, sel.to(device)].flatten()
+    x = x[~torch.isnan(x)]
+    if len(x) == 0:
+        return
+    print(f"{name:16s} {x.mean():+7.2f} {x.std():6.2f} {x.quantile(0.05):+8.2f} {x.quantile(0.95):+8.2f}")
+
+
+for s in range(n_scen):
+    print_com(SCENARIOS[s][0], scen_of_env == s)
+for b in range(n_bins):
+    print_com(f"제자리 {bin_name(b)}", (scen_of_env == 0) & (bin_of_env == b))
+
+# 넘어지기 전 무게중심·팔 목표 (처음 넘어진 환경, 시나리오별)
+fall_t_c = fall_t.cpu()
+for s in range(n_scen):
+    ids = ((scen_of_env == s) & (fall_t_c >= 0)).nonzero().flatten()
+    if len(ids) == 0:
+        continue
+    ft = fall_t_c[ids]
+    pre = torch.clamp(ft - 10, min=0)  # 0.2초 전
+    com_pre = com_hist[pre.to(device), ids.to(device)].cpu() * 100
+    line = f"{SCENARIOS[s][0]:16s} {len(ids):3d}개 | 넘어지기 0.2초 전 무게중심 평균 {com_pre.mean():+.1f}cm (뒤쪽 {int((com_pre < 0).sum())}개)"
+    if arm_sched is not None:
+        at = arm_sched[ft.to(device), ids.to(device)].cpu()  # (n, 4) [왼 어깨, 오른 어깨, 왼 팔꿈치, 오른 팔꿈치]
+        before = arm_sched[torch.clamp(ft - 50, min=0).to(device), ids.to(device)].cpu()
+        sh = at[:, :2].mean(dim=1)
+        dsh = (at[:, :2] - before[:, :2]).mean(dim=1)
+        line += (f" | 넘어질 때 어깨 목표 평균 {sh.mean():+.2f} (양팔 −0.2 보다 뒤/아래 {int(((at[:, 0] > -0.2) & (at[:, 1] > -0.2)).sum())}개, "
+                 f"짐 든 자세 −0.5 근처 {int(((at[:, :2] + 0.5).abs().max(dim=1).values < 0.05).sum())}개), "
+                 f"1초 동안 어깨 목표 변화 평균 {dsh.mean():+.2f} (뒤로 간 경우 {int((dsh > 0.1).sum())}개, 앞으로 {int((dsh < -0.1).sum())}개)")
+    print(line)
 
 # ---- 항목별 보상 (가중치를 곱한 값의 스텝 평균) ----
 rew_mean = (rew_sum / cnt[:, None]).cpu()
