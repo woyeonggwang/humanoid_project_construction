@@ -381,6 +381,11 @@ class ArmRandEventCfg(CarryEventCfg):
             "shoulder_range": ARM_RAND_SHOULDER_PITCH,
             "elbow_range": ARM_RAND_ELBOW_PITCH,
             "max_speed": 2.0,  # rad/s, 어깨 범위 1.5 rad 를 약 0.75초에 지나감
+            # 정지 명령인 환경은 0.8 (2차, 2026-11-20): 1차(0.5)는 팔을 움직이며 서 있을 때 46% 넘어짐.
+            # 상자 집기는 서서 팔을 움직이는 동작이므로 그 연습을 늘림
+            "random_prob_standing": 0.8,
+            "command_name": "base_velocity",
+            "stand_threshold": 0.1,
         },
     )
 

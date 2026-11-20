@@ -246,12 +246,12 @@ def arm_goal_from_uniform(
     carry: torch.Tensor,
     shoulder_range: tuple[float, float],
     elbow_range: tuple[float, float],
-    random_prob: float,
+    random_prob: float | torch.Tensor,
     symmetric_prob: float,
 ) -> torch.Tensor:
     """0~1 균일 난수 u (n, 6) → 팔 목표 자세 (n, 4), 순서는 ARM_TARGET_JOINTS.
 
-    - u[:, 0] < random_prob 이면 무작위 자세, 아니면 짐 든 자세(carry, (n, 4))로 돌아감
+    - u[:, 0] < random_prob 이면 무작위 자세, 아니면 짐 든 자세(carry, (n, 4))로 돌아감 (random_prob 는 숫자 또는 환경별 (n,) 텐서)
     - u[:, 1] < symmetric_prob 이면 양팔 같은 자세 (상자를 양손으로 드는 경우), 아니면 좌우 따로
     - u[:, 2:4] = 왼팔 (어깨, 팔꿈치), u[:, 4:6] = 오른팔
     학습 이벤트(randomize_arm_targets)와 평가 스크립트(eval_carry.py --arm_motion)가 같은 규칙을 쓰도록 함수로 둠.
@@ -276,7 +276,7 @@ class randomize_arm_targets(ManagerTermBase):
     """interval 이벤트 (매 스텝 호출): 어깨·팔꿈치 pitch 의 모터 목표값을 무작위 자세로 옮긴다.
 
     - 환경마다 change_interval_s 범위(초)에서 뽑은 간격으로 새 목표 자세를 정함
-      (random_prob 확률로 무작위 자세, 나머지는 짐 든 자세로 돌아감)
+      (random_prob 확률로 무작위 자세, 나머지는 짐 든 자세로 돌아감. 정지 명령인 환경은 random_prob_standing 확률)
     - 목표값은 한 번에 바꾸지 않고 max_speed(rad/s) 로 옮김 (IK 로 팔을 내리는 동작처럼 연속으로 움직이게)
     - 리셋되면 짐 든 자세에서 다시 시작 (리셋 이벤트 hold_arms 가 넣는 목표값과 같음)
     매 스텝 목표값을 직접 옮겨야 하므로 interval_range_s=(0, 0), is_global_time=True 로 등록해 매 스텝 부르고,
@@ -317,13 +317,20 @@ class randomize_arm_targets(ManagerTermBase):
         shoulder_range: tuple[float, float],
         elbow_range: tuple[float, float],
         max_speed: float,
+        random_prob_standing: float | None = None,
+        command_name: str = "base_velocity",
+        stand_threshold: float = 0.1,
     ):
         self.time_left -= env.step_dt
         due = (self.time_left <= 0.0).nonzero().flatten()
         if len(due) > 0:
             u = torch.rand(len(due), 6, device=self.device)
+            prob = random_prob
+            if random_prob_standing is not None:  # 서 있는 환경은 팔을 더 자주 움직임
+                standing = is_standing_command(env, command_name, stand_threshold)[due]
+                prob = torch.where(standing, random_prob_standing, random_prob)
             self.goal[due] = arm_goal_from_uniform(
-                u, self.carry[due], shoulder_range, elbow_range, random_prob, symmetric_prob
+                u, self.carry[due], shoulder_range, elbow_range, prob, symmetric_prob
             )
             self.time_left[due] = self._sample_interval(len(due), change_interval_s)
         self.current = step_toward(self.current, self.goal, max_speed * env.step_dt)

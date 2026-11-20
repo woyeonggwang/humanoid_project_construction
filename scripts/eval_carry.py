@@ -21,7 +21,7 @@
 - 손 무게: 시나리오 × 구간마다 같은 수의 환경. 구간 안에서 무작위, 양손 같은 무게 (상자를 드는 상황)
   학습 때의 무게 무작위화(add_hand_mass)는 끄고 같은 방식(질량 + 관성 비율)으로 직접 넣음
 - 흔들림·손 위치 통계는 에피소드 시작 후 --warmup 스텝(처음 처지는 구간)을 뺀다. 넘어짐은 전체 구간
-- --arm_motion: 어깨·팔꿈치 pitch 목표값을 미리 정한 순서로 움직임 (팔 무작위 움직임판 학습 이벤트와 같은 규칙·범위·속도,
+- --arm_motion: 어깨·팔꿈치 pitch 목표값을 미리 정한 순서로 움직임 (팔 무작위판 1차 학습 이벤트와 같은 규칙·범위·속도로 고정,
   난수는 --seed 로 고정 → 어느 정책이든 같은 팔 움직임). 학습 과제에 팔 무작위 이벤트가 있어도 평가에서는 끄고 이 순서를 씀
   이때 팔 처짐·흔들림·손 위치 값은 일부러 움직인 몫이 섞이므로 의미 없음 (넘어짐·속도·걸음·자세 지표를 봄)
 
@@ -142,12 +142,13 @@ target_cmd = torch.tensor([c for _, c in SCENARIOS], device=device)[scen_of_env.
 
 # 팔 움직임 순서 (--arm_motion): 학습 이벤트(carry_mdp.randomize_arm_targets)와 같은 규칙을 CPU 난수로 미리 계산
 from humanoid_tasks.g1_carry import carry_mdp  # noqa: E402
-from humanoid_tasks.g1_carry.env_cfg import ArmRandEventCfg  # noqa: E402
 
 arm_target_ids = [robot.joint_names.index(n) for n in carry_mdp.ARM_TARGET_JOINTS]
 arm_sched = None
 if args_cli.arm_motion:
-    ap = ArmRandEventCfg().arm_motion.params
+    # 평가 조건은 고정 (팔 무작위판 1차 학습 이벤트와 같은 값). 학습 설정을 바꿔도 이전 결과와 비교할 수 있게 숫자로 둠
+    ap = {"change_interval_s": (2.0, 5.0), "random_prob": 0.5, "symmetric_prob": 0.5,
+          "shoulder_range": (-1.2, 0.3), "elbow_range": (0.3, 1.5), "max_speed": 2.0}
     ga = torch.Generator().manual_seed(args_cli.seed + 1)
     carry = robot.data.default_joint_pos[:, arm_target_ids].cpu()
     cur, goal = carry.clone(), carry.clone()
