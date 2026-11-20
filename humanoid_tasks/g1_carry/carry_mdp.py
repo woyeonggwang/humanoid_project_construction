@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import quat_apply_inverse
+from isaaclab.managers import ManagerTermBase, SceneEntityCfg
+from isaaclab.utils.math import quat_apply_inverse, yaw_quat
 
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv, ManagerBasedRLEnv
+    from isaaclab.managers import RewardTermCfg
 
 
 def hold_joints_at_default(env: ManagerBasedEnv, env_ids: torch.Tensor | None, asset_cfg: SceneEntityCfg):
@@ -42,10 +43,15 @@ def gait_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
     return torch.remainder(t / period, 1.0)
 
 
-def gait_phase_obs(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
-    """관측: 걸음 주기 신호 (sin 2πφ, cos 2πφ)."""
+def gait_phase_obs(env: ManagerBasedRLEnv, period: float, command_name: str, stand_threshold: float) -> torch.Tensor:
+    """관측: 걸음 주기 신호 (sin 2πφ, cos 2πφ). 명령이 거의 0 이면 (0, 0).
+
+    정지 명령에서는 박자 보상의 정답이 '양발 딛기'이므로 박자 신호도 꺼서 걷는 박자와 구분되게 한다
+    (신호가 계속 돌면 정지 명령에도 박자대로 제자리걸음. 2026-11-20 시험 7·8차).
+    """
     phi = gait_phase(env, period) * (2.0 * math.pi)
-    return torch.stack([torch.sin(phi), torch.cos(phi)], dim=-1)
+    clock = torch.stack([torch.sin(phi), torch.cos(phi)], dim=-1)
+    return clock * (~is_standing_command(env, command_name, stand_threshold)).float()[:, None]
 
 
 def feet_contact(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -149,12 +155,74 @@ def feet_lateral_distance(
     return torch.clamp(min_dist - lateral, min=0.0) + torch.clamp(lateral - max_dist, min=0.0)
 
 
-def feet_air_time_variance(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
-    """벌점: 좌우 발의 직전 공중 시간·접촉 시간의 분산 (좌우 걸음 대칭).
+class lin_vel_avg_error(ManagerTermBase):
+    """벌점: (명령 − 실제) 이동 속도를 약 한 걸음 주기 동안 평균한 값의 크기 (m/s).
 
-    Isaac Lab Spot 과제의 air_time_variance_penalty 와 같은 식 (0.5초에서 자름).
+    속도 따라가기 보상(exp)은 오차가 작을 때 거의 평평해서, 명령보다 조금 느리게 걸어도 보상을 거의 다 받는다
+    (2026-11-20: 0.3m/s 명령에 0.26m/s 로 걸어도 98%). 순간 속도는 걸음마다 출렁이므로 평균한 오차에 벌점을 준다.
+    평균은 지수 이동 평균(시간 상수 time_constant 초), 리셋되면 0 부터.
     """
-    sensor = env.scene.sensors[sensor_cfg.name]
-    last_air = torch.clip(sensor.data.last_air_time[:, sensor_cfg.body_ids], max=0.5)
-    last_contact = torch.clip(sensor.data.last_contact_time[:, sensor_cfg.body_ids], max=0.5)
-    return torch.var(last_air, dim=1) + torch.var(last_contact, dim=1)
+
+    def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.avg_error = torch.zeros(env.num_envs, 2, device=env.device)
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = slice(None)
+        self.avg_error[env_ids] = 0.0
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        command_name: str,
+        time_constant: float,
+        asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+    ) -> torch.Tensor:
+        asset = env.scene[asset_cfg.name]
+        vel = quat_apply_inverse(yaw_quat(asset.data.root_quat_w), asset.data.root_lin_vel_w)[:, :2]
+        error = env.command_manager.get_command(command_name)[:, :2] - vel
+        self.avg_error += (env.step_dt / time_constant) * (error - self.avg_error)
+        return torch.norm(self.avg_error, dim=1)
+
+
+def stand_joint_deviation_l1(
+    env: ManagerBasedRLEnv, command_name: str, stand_threshold: float, asset_cfg: SceneEntityCfg
+) -> torch.Tensor:
+    """벌점: 정지 명령일 때 관절이 기본 자세에서 벗어난 정도 (절댓값 합, rad).
+
+    정지 명령에서는 양발만 딛고 있으면 박자 보상을 다 받으므로 서 있는 자세가 정해지지 않는다
+    (2026-11-20 본 학습: 발과 상체는 앞을 보는데 골반만 약 36° 돌아간 자세로 섬).
+    """
+    asset = env.scene[asset_cfg.name]
+    deviation = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+    return torch.sum(deviation.abs(), dim=1) * is_standing_command(env, command_name, stand_threshold).float()
+
+
+def stand_flat_orientation_l2(
+    env: ManagerBasedRLEnv, command_name: str, stand_threshold: float, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """벌점: 정지 명령일 때 골반이 기운 정도 (골반 좌표계에서 본 중력 방향의 수평 성분 제곱).
+
+    stand_joint_deviation_l1 은 골반·허리를 돌리는 관절만 보므로 앞뒤로 기운 자세는 잡지 못한다
+    (2026-11-20 본 학습: 정지 명령에 뒤로 약 16° 젖힌 채 서고, 양손 +4~5kg 에서 넘어짐).
+    """
+    asset = env.scene[asset_cfg.name]
+    tilt = torch.sum(torch.square(asset.data.projected_gravity_b[:, :2]), dim=1)
+    return tilt * is_standing_command(env, command_name, stand_threshold).float()
+
+
+def feet_slip(
+    env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg, asset_cfg: SceneEntityCfg, max_speed: float
+) -> torch.Tensor:
+    """벌점: 바닥에 닿아 있는 발의 수평 속도 제곱 (양발 합, 발마다 max_speed² 에서 자름).
+
+    걸음 박자 보상은 '닿음 여부'만 보므로 발을 바닥에 살짝 댄 채 앞으로 끌어도 보상을 받는다.
+    2026-11-20 평가에서 한 걸음 약 36cm 중 21cm 를 닿은 채 끌어서 이동 (기준 정책은 1cm).
+    닿아 있는 발은 멈춰 있어야 하므로 실제로 발을 들어 옮기는 걸음이 되게 한다.
+    제곱이라 닿는 순간의 작은 잔여 속도에는 약하고, 빠르게 끄는 동작에는 강하다.
+    """
+    asset = env.scene[asset_cfg.name]
+    contact = feet_contact(env, sensor_cfg).float()
+    speed_sq = torch.sum(torch.square(asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2]), dim=-1)
+    return torch.sum(torch.clamp(speed_sq, max=max_speed**2) * contact, dim=1)

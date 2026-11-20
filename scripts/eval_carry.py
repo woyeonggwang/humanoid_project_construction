@@ -84,6 +84,8 @@ cmd_cfg = env_cfg.commands.base_velocity
 cmd_cfg.heading_command = False
 cmd_cfg.rel_standing_envs = 0.0
 cmd_cfg.resampling_time_range = (1.0e6, 1.0e6)
+if hasattr(cmd_cfg, "rel_turn_envs"):  # 걸음 보상 추가판의 제자리 회전 명령 섞기도 끔 (명령은 아래에서 고정)
+    cmd_cfg.rel_turn_envs = 0.0
 cmd_cfg.debug_vis = False
 
 agent_cfg = load_cfg_from_registry(args_cli.task, "rsl_rl_cfg_entry_point")
@@ -171,6 +173,29 @@ prev_contact = torch.ones(N, 2, dtype=torch.bool, device=device)
 swing_max = torch.zeros(N, 2, device=device)
 last_td_foot = torch.full((N,), -1, dtype=torch.long, device=device)
 
+# 자세·보폭·넘어진 시점·항목별 보상 진단용
+reward_manager = unwrapped.reward_manager
+reward_names = list(reward_manager.active_terms)
+rew_sum = torch.zeros(N, len(reward_names), device=device)  # 항목별 보상(가중치 곱한 값)의 합
+torso_joint_id = robot.joint_names.index("torso_joint")
+pitch_sum = torch.zeros(N, device=device)  # 골반 앞뒤 기울기 (+ = 앞으로 숙임)
+tilt_sum = torch.zeros(N, device=device)  # 골반 전체 기울기 (연직에서 벗어난 각도, 방향 무관)
+vx_sq_sum = torch.zeros(N, device=device)
+wz_sq_sum = torch.zeros(N, device=device)
+pz_sq_sum = torch.zeros(N, device=device)
+waist_sum = torch.zeros(N, device=device)
+waist_sq_sum = torch.zeros(N, device=device)
+knee_hist = torch.zeros(T, N, 2, device=device)
+sepx_hist = torch.zeros(T, N, device=device)  # 골반 기준 앞뒤 발 간격 (왼발 − 오른발)
+footxy_hist = torch.zeros(T, N, 2, 2, device=device)  # 발 수평 위치 (닿은 채 미끄러진 거리 계산용)
+heading_hist = torch.zeros(T, N, 2, device=device)  # 골반이 향하는 방향 단위 벡터
+fall_step = torch.full((N,), -1, dtype=torch.long, device=device)  # 처음 넘어진 시점 (에피소드 스텝)
+fall_pitch = torch.zeros(N, device=device)  # 넘어지기 한 스텝 전 기울기
+fall_roll = torch.zeros(N, device=device)
+prev_len = unwrapped.episode_length_buf.clone()
+prev_pitch = torch.zeros(N, device=device)
+prev_roll = torch.zeros(N, device=device)
+
 
 def hand_pos_in_pelvis() -> torch.Tensor:
     """손(palm) 링크 위치, 골반(root) 기준 좌표 (N, 2, 3), 단위 m."""
@@ -190,7 +215,12 @@ with torch.inference_mode():
     for t in range(T):
         actions = policy(obs)
         obs, _, dones, _ = env.step(actions)
-        falls += unwrapped.termination_manager.terminated.long()
+        terminated = unwrapped.termination_manager.terminated
+        falls += terminated.long()
+        new_fall = terminated & (fall_step < 0)
+        fall_step = torch.where(new_fall, prev_len + 1, fall_step)
+        fall_pitch = torch.where(new_fall, prev_pitch, fall_pitch)
+        fall_roll = torch.where(new_fall, prev_roll, fall_roll)
         # 명령을 시나리오 값으로 되돌리고 관측을 다시 계산 (리셋된 환경은 명령이 다시 뽑혔으므로)
         cmd_term.vel_command_b[:] = target_cmd
         obs = env.get_observations()
@@ -234,7 +264,29 @@ with torch.inference_mode():
         prev_contact = contact
         # 양발 좌우 간격 (골반 기준 y)
         rel = (robot.data.body_pos_w[:, foot_body_ids[0]] - robot.data.body_pos_w[:, foot_body_ids[1]])
-        g_feet_lat += quat_apply_inverse(robot.data.root_quat_w, rel)[:, 1].abs() * v
+        rel_b = quat_apply_inverse(robot.data.root_quat_w, rel)
+        g_feet_lat += rel_b[:, 1].abs() * v
+
+        # ---- 자세·보폭·항목별 보상 진단 ----
+        grav = robot.data.projected_gravity_b
+        pitch = torch.atan2(grav[:, 0], -grav[:, 2])  # + = 앞으로 숙임
+        roll = torch.atan2(-grav[:, 1], -grav[:, 2])  # + = 오른쪽으로 기욺
+        pitch_sum += pitch * v
+        tilt_sum += torch.acos(torch.clamp(-grav[:, 2], -1.0, 1.0)) * v
+        vx_sq_sum += v * robot.data.root_lin_vel_b[:, 0] ** 2
+        wz_sq_sum += v * robot.data.root_ang_vel_b[:, 2] ** 2
+        pz_sq_sum += v * robot.data.root_pos_w[:, 2] ** 2
+        waist = robot.data.joint_pos[:, torso_joint_id]
+        waist_sum += waist * v
+        waist_sq_sum += waist**2 * v
+        knee_hist[t] = robot.data.joint_pos[:, knee_ids]
+        sepx_hist[t] = rel_b[:, 0]
+        footxy_hist[t] = robot.data.body_pos_w[:, foot_body_ids, :2]
+        yaw = robot.data.heading_w
+        heading_hist[t] = torch.stack([torch.cos(yaw), torch.sin(yaw)], dim=1)
+        rew_sum += reward_manager._step_reward * v[:, None]
+        prev_len = unwrapped.episode_length_buf.clone()
+        prev_pitch, prev_roll = pitch, roll
 
 # ---- 통계 (환경·관절별, 유효 스텝만) ----
 m = mask_hist.float()
@@ -410,7 +462,19 @@ d_alt_hits = torch.zeros(N, device=device)
 d_alt_total = torch.zeros(N, device=device)
 d_last = torch.full((N,), -1, dtype=torch.long, device=device)
 d_swing_max = fz[0].clone()
+d_step_sum = torch.zeros(N, device=device)  # 보폭: 발이 닿는 순간 그 발이 반대 발보다 앞에 있는 거리
+d_slide = torch.zeros(N, device=device)  # 닿은 채 발이 수평으로 움직인 거리 합
+d_slide_fwd = torch.zeros(N, device=device)  # 그중 진행 방향 성분 (+ = 앞으로 미끄러짐)
+d_slide_early = torch.zeros(N, device=device)  # 닿은 뒤 0.1초(5스텝) 안에 움직인 거리
+since_td = torch.zeros(N, 2, device=device)
 for t in range(1, T):
+    _w = (dc[t] & dc[t - 1]).float() * vmask[t].float()[:, None]  # 두 스텝 연속 닿아 있던 발
+    _d = footxy_hist[t] - footxy_hist[t - 1]
+    _dist = _d.norm(dim=-1)
+    since_td = torch.where(dc[t], since_td + 1, torch.zeros_like(since_td))
+    d_slide += (_dist * _w).sum(dim=1)
+    d_slide_fwd += ((_d * heading_hist[t][:, None, :]).sum(dim=-1) * _w).sum(dim=1)
+    d_slide_early += (_dist * _w * (since_td <= 5).float()).sum(dim=1)
     c, pc, v = dc[t], dc[t - 1], vmask[t]
     vf = v.float()
     nc = c.sum(dim=1)
@@ -420,6 +484,7 @@ for t in range(1, T):
     td_d = c & ~pc & v[:, None]
     d_lift_sum += ((d_swing_max - fz[t]) * td_d.float()).sum(dim=1)
     d_td += td_d.float().sum(dim=1)
+    d_step_sum += sepx_hist[t] * (td_d[:, 0].float() - td_d[:, 1].float())
     for f in range(2):
         ev = td_d[:, f]
         has_last = d_last >= 0
@@ -448,6 +513,69 @@ for s in range(n_scen):
     chars = "".join("B" if l and r else "L" if l else "R" if r else "." for l, r in c.tolist())
     print(f"{SCENARIOS[s][0]:16s} {chars}")
 
+# ---- 자세·보폭 진단 (사람 걸음과 비교할 값) ----
+def _std(sq_sum: torch.Tensor, s_sum: torch.Tensor) -> torch.Tensor:
+    return (sq_sum / cnt - (s_sum / cnt) ** 2).clamp(min=0).sqrt()
+
+
+knee_valid = torch.where(mask_hist[:, :, None], knee_hist, torch.full_like(knee_hist, float("nan")))
+posture = {
+    "pitch": (pitch_sum / cnt * RAD2DEG).cpu(),  # 골반 앞뒤 기울기 평균 (deg, + 앞)
+    "tilt": (tilt_sum / cnt * RAD2DEG).cpu(),  # 골반 전체 기울기 평균 (deg)
+    "step_len": (d_step_sum / d_td.clamp(min=1) * 100).cpu(),  # 보폭 (cm)
+    "swing_knee": (torch.nanquantile(knee_valid, 0.95, dim=0).mean(dim=1) * RAD2DEG).cpu(),  # 무릎 각도 상위 5% (옮길 때 굽힘)
+    "waist_mean": (waist_sum / cnt * RAD2DEG).cpu(),
+    "waist_std": (_std(waist_sq_sum, waist_sum) * RAD2DEG).cpu(),
+    "vx_std": _std(vx_sq_sum, vx_sum).cpu(),
+    "wz_std": _std(wz_sq_sum, wz_sum).cpu(),
+    "pz_std": (_std(pz_sq_sum, g_pelvis_z) * 100).cpu(),  # 골반 높이 흔들림 (cm)
+    # 발 미끄러짐: 한 걸음(발이 한 번 닿았다 떨어질 때까지) 동안 닿은 채 수평으로 움직인 거리 (cm)
+    "slide": (d_slide / d_td.clamp(min=1) * 100).cpu(),
+    "slide_fwd": (d_slide_fwd / d_td.clamp(min=1) * 100).cpu(),
+    "slide_early": (d_slide_early / d_slide.clamp(min=1e-6) * 100).cpu(),  # 닿은 뒤 0.1초 안의 몫 (%)
+}
+print("\n========== 자세·보폭 진단 (떨림을 걸러낸 접촉 기준, 유효 스텝) ==========")
+print("보폭 = 닿는 순간 앞뒤 발 간격, 미끄러짐 = 한 걸음 동안 닿은 채 움직인 거리 (앞 = 진행 방향 성분, 초반 = 닿은 뒤 0.1초 안의 몫)")
+print(f"{'구분':16s} {'골반기울기':>9s} {'전체기울기':>9s} {'보폭':>7s} {'미끄러짐(앞/초반)':>20s} {'옮길때무릎':>9s} {'허리회전 평균/std':>16s} "
+      f"{'vx std':>7s} {'wz std':>7s} {'골반높이std':>10s}")
+
+
+def print_posture(name: str, sel: torch.Tensor):
+    p = {k: v[sel].mean().item() for k, v in posture.items()}
+    print(f"{name:16s} {p['pitch']:+8.1f}° {p['tilt']:8.1f}° {p['step_len']:5.1f}cm {p['slide']:5.1f}cm ({p['slide_fwd']:+5.1f} / {p['slide_early']:3.0f}%) "
+          f"{p['swing_knee']:8.1f}° {p['waist_mean']:+7.1f}° / {p['waist_std']:4.1f}° {p['vx_std']:7.3f} {p['wz_std']:7.3f} {p['pz_std']:8.2f}cm")
+
+
+for s in range(n_scen):
+    print_posture(SCENARIOS[s][0], scen_of_env == s)
+for s in range(n_scen):
+    for b in (0, n_bins - 1):
+        print_posture(f"{SCENARIOS[s][0][:6]} {bin_name(b)}", (scen_of_env == s) & (bin_of_env == b))
+
+# ---- 넘어진 시점·방향 ----
+fall_step_c, fall_pitch_c, fall_roll_c = fall_step.cpu(), fall_pitch.cpu() * RAD2DEG, fall_roll.cpu() * RAD2DEG
+print("\n========== 처음 넘어진 시점 (에피소드 시작 후 초) · 넘어지기 직전 기울기 ==========")
+for s in range(n_scen):
+    sel = (scen_of_env == s) & (fall_step_c >= 0)
+    if int(sel.sum()) == 0:
+        continue
+    ts = fall_step_c[sel].float() * dt
+    edges = [0, 2, 5, 10, 15, 1e9]
+    hist = [int(((ts >= lo) & (ts < hi)).sum()) for lo, hi in zip(edges[:-1], edges[1:])]
+    print(f"{SCENARIOS[s][0]:16s} {int(sel.sum()):3d}개 | 0~2초 {hist[0]}, 2~5초 {hist[1]}, 5~10초 {hist[2]}, 10~15초 {hist[3]}, 15초~ {hist[4]} "
+          f"| 직전 앞뒤 기울기 평균 {fall_pitch_c[sel].mean():+.1f}° (앞으로 {int((fall_pitch_c[sel] > 0).sum())}, 뒤로 {int((fall_pitch_c[sel] < 0).sum())}), "
+          f"좌우 |기울기| 평균 {fall_roll_c[sel].abs().mean():.1f}°")
+
+# ---- 항목별 보상 (가중치를 곱한 값의 스텝 평균) ----
+rew_mean = (rew_sum / cnt[:, None]).cpu()
+print("\n========== 항목별 보상: 시나리오별 스텝 평균 (가중치 곱한 값, 유효 스텝) ==========")
+print(f"{'항목':28s} " + " ".join(f"{SCENARIOS[s][0][:8]:>10s}" for s in range(n_scen)) + f" {'빠르게 +0~1':>12s} {'빠르게 +4~5':>12s}")
+for k, name in enumerate(reward_names):
+    cols = [rew_mean[scen_of_env == s, k].mean().item() for s in range(n_scen)]
+    extra = [rew_mean[(scen_of_env == 2) & (bin_of_env == b), k].mean().item() for b in (0, n_bins - 1)]
+    print(f"{name:28s} " + " ".join(f"{c:10.4f}" for c in cols) + " " + " ".join(f"{c:12.4f}" for c in extra))
+print(f"{'합계':28s} " + " ".join(f"{rew_mean[scen_of_env == s].sum(dim=1).mean().item():10.4f}" for s in range(n_scen)))
+
 # 진단: 공중·접촉 구간 길이 분포 (유효 구간, 시나리오별 앞 20개 환경)
 print("\n========== 진단: 한 발의 공중·접촉 구간 길이 분포 (스텝, 1스텝 = 0.02초) ==========")
 w0 = args_cli.warmup
@@ -459,11 +587,14 @@ for s in range(n_scen):
             c = contact_hist[w0:, e, f].cpu()
             air += phase_durations(c, False)
             stance += phase_durations(c, True)
+    lifts = lift_hist[w0:, envs].flatten()
+    lifts = lifts[~torch.isnan(lifts)].cpu() * 100
+    if len(air) == 0 or len(stance) == 0 or len(lifts) == 0:  # 발을 떼지 않음 (정지 명령에 양발로 서 있는 경우)
+        print(f"{SCENARIOS[s][0]:16s} 공중 {len(air)}개, 접촉 {len(stance)}개, 닿는 순간 {len(lifts)}개 — 분포 계산 생략")
+        continue
     a, st = torch.tensor(air, dtype=torch.float), torch.tensor(stance, dtype=torch.float)
     print(f"{SCENARIOS[s][0]:16s} 공중 {len(air):5d}개: 1~2스텝 {(a <= 2).float().mean() * 100:5.1f}%, 중앙값 {a.median():.0f}, "
           f"평균 {a.mean():.1f} | 접촉 {len(stance):5d}개: 1~2스텝 {(st <= 2).float().mean() * 100:5.1f}%, 중앙값 {st.median():.0f}, 평균 {st.mean():.1f}")
-    lifts = lift_hist[w0:, envs].flatten()
-    lifts = lifts[~torch.isnan(lifts)].cpu() * 100
     print(f"{'':16s} 닿는 순간 들어 올린 높이(cm): 2cm 미만 {(lifts < 2).float().mean() * 100:5.1f}%, "
           f"중앙값 {lifts.median():.1f}, 상위 10% {lifts.quantile(0.9):.1f}")
 

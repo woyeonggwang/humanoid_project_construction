@@ -9,6 +9,8 @@ G1 Flat 과 달라지는 점
 5. 원본 구동기 'arms'(어깨·팔꿈치·손가락 한 그룹, 강성 40)를 어깨·팔꿈치(강성을 올림)와 손가락(원본 값)으로 나눔
 """
 
+import math
+
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
@@ -18,9 +20,10 @@ from isaaclab.utils import configclass
 import isaaclab_tasks.manager_based.locomotion.velocity.mdp as mdp
 from isaaclab_tasks.manager_based.locomotion.velocity.config.g1.flat_env_cfg import G1FlatEnvCfg
 from isaaclab_tasks.manager_based.locomotion.velocity.config.g1.rough_env_cfg import G1Rewards
-from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import EventCfg, ObservationsCfg
+from isaaclab_tasks.manager_based.locomotion.velocity.velocity_env_cfg import CommandsCfg, EventCfg, ObservationsCfg
 
 from . import carry_mdp
+from .carry_commands import UniformVelocityCommandWithTurnCfg
 
 # 정책이 움직이는 관절 (다리 12 + 허리 1)
 LEG_JOINTS = [".*_hip_yaw_joint", ".*_hip_roll_joint", ".*_hip_pitch_joint", ".*_knee_joint",
@@ -156,8 +159,11 @@ FEET_ASSET = SceneEntityCfg("robot", body_names=FEET, preserve_order=True)
 class GaitObservationsCfg(ObservationsCfg):
     @configclass
     class PolicyCfg(ObservationsCfg.PolicyCfg):
-        # 걸음 주기 신호 (sin, cos) — 관측 맨 끝에 붙음
-        gait_phase = ObsTerm(func=carry_mdp.gait_phase_obs, params={"period": GAIT_PERIOD})
+        # 걸음 주기 신호 (sin, cos) — 관측 맨 끝에 붙음. 정지 명령이면 (0, 0)
+        gait_phase = ObsTerm(
+            func=carry_mdp.gait_phase_obs,
+            params={"period": GAIT_PERIOD, "command_name": "base_velocity", "stand_threshold": 0.1},
+        )
 
     policy: PolicyCfg = PolicyCfg()
 
@@ -165,9 +171,11 @@ class GaitObservationsCfg(ObservationsCfg):
 @configclass
 class GaitRewardsCfg(G1Rewards):
     # 걸음 박자: 주기 앞부분은 왼발, 반 주기 늦게 오른발이 딛으면 보상 (명령 0 이면 양발 딛기가 정답)
+    # 가중치 0.3 → 1.0 (2026-11-20): 발 끌기를 막자(feet_slip) 박자를 어기고 짧은 걸음을 잦게 딛는 쪽이
+    # 속도 보상에서 더 이득이었음 (1.0m/s 에서 5걸음/초·보폭 15cm, 박자 일치 75%)
     gait_contact = RewTerm(
         func=carry_mdp.gait_contact,
-        weight=0.3,
+        weight=1.0,
         params={
             "sensor_cfg": FEET_SENSOR,
             "command_name": "base_velocity",
@@ -210,14 +218,62 @@ class GaitRewardsCfg(G1Rewards):
         weight=-10.0,
         params={"asset_cfg": FEET_ASSET, "min_dist": 0.15, "max_dist": 0.30},
     )
-    # 좌우 대칭: 좌우 발의 공중·접촉 시간 분산
-    feet_symmetry = RewTerm(func=carry_mdp.feet_air_time_variance, weight=-10.0, params={"sensor_cfg": FEET_SENSOR})
+    # 서 있는 자세: 정지 명령일 때 골반·허리를 돌리는 관절(엉덩이 yaw·roll, 허리)이 기본 자세에서 벗어난 만큼 벌점
+    # 가중치 -2.0: -1.0 으로 이어 학습했을 때 엉덩이는 바로잡혔지만 허리는 500회 동안 36° → 27° 로만 줄었음
+    stand_posture = RewTerm(
+        func=carry_mdp.stand_joint_deviation_l1,
+        weight=-2.0,
+        params={
+            "command_name": "base_velocity",
+            "stand_threshold": 0.1,
+            "asset_cfg": SceneEntityCfg("robot", joint_names=[".*_hip_yaw_joint", ".*_hip_roll_joint", "torso_joint"]),
+        },
+    )
+    # 서 있을 때 상체 세우기: 정지 명령일 때 골반 기울기 벌점 (16° 기울면 약 -1.5)
+    stand_upright = RewTerm(
+        func=carry_mdp.stand_flat_orientation_l2,
+        weight=-20.0,
+        params={"command_name": "base_velocity", "stand_threshold": 0.1},
+    )
+    # 평균 속도 오차: 한 걸음 주기 동안 평균한 (명령 − 실제) 이동 속도의 크기에 벌점 (명령보다 느리게 걷는 것 보정)
+    lin_vel_avg_error = RewTerm(
+        func=carry_mdp.lin_vel_avg_error,
+        weight=-2.0,
+        params={"command_name": "base_velocity", "time_constant": GAIT_PERIOD},
+    )
+    # 발 끌기 방지: 닿아 있는 발의 수평 속도 제곱 (발마다 1 (m/s)² 에서 자름)
+    # (박자 보상은 닿음 여부만 봐서, 발을 바닥에 댄 채 끌어 한 걸음의 절반 이상을 이동했음. 2026-11-20)
+    feet_slip = RewTerm(
+        func=carry_mdp.feet_slip,
+        weight=-1.0,
+        params={"sensor_cfg": FEET_SENSOR, "asset_cfg": FEET_ASSET, "max_speed": 1.0},
+    )
+
+
+@configclass
+class GaitCommandsCfg(CommandsCfg):
+    # 원본 base_velocity 와 같은 값 + 제자리 회전 명령 섞기 (G1 Flat 의 __post_init__ 이 ranges 를 다시 덮어씀)
+    base_velocity = UniformVelocityCommandWithTurnCfg(
+        asset_name="robot",
+        resampling_time_range=(10.0, 10.0),
+        rel_standing_envs=0.02,
+        rel_heading_envs=1.0,
+        heading_command=True,
+        heading_control_stiffness=0.5,
+        debug_vis=True,
+        ranges=UniformVelocityCommandWithTurnCfg.Ranges(
+            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-1.0, 1.0), ang_vel_z=(-1.0, 1.0), heading=(-math.pi, math.pi)
+        ),
+        rel_turn_envs=0.0,
+        turn_speed_range=(0.5, 1.0),
+    )
 
 
 @configclass
 class G1CarryGaitFlatEnvCfg(G1CarryFlatEnvCfg):
     observations: GaitObservationsCfg = GaitObservationsCfg()
     rewards: GaitRewardsCfg = GaitRewardsCfg()
+    commands: GaitCommandsCfg = GaitCommandsCfg()
 
     def __post_init__(self):
         # 짐 든 채 걷기 설정(G1 Flat 변경 포함)을 먼저 전부 적용
@@ -227,6 +283,22 @@ class G1CarryGaitFlatEnvCfg(G1CarryFlatEnvCfg):
         # 회전 연습: 환경의 절반은 방향 오차 대신 회전 속도(-1~1 rad/s)를 직접 뽑아 다시 뽑을 때(10초)까지 유지
         # (원래 1.0 = 모든 환경이 '방향 오차 × 0.5' 로 회전 → 오래 도는 상황이 드묾. 시험 3차에서 제자리 회전 중 넘어짐 62%)
         self.commands.base_velocity.rel_heading_envs = 0.5
+        # 정지 연습: 정지 명령(속도 0)을 받는 환경 비율 0.02 → 0.15
+        # (1차 본 학습은 정지 명령에도 제자리걸음. 시험 5차에서 정지 시 양발 지지 약 90% 로 효과 확인)
+        self.commands.base_velocity.rel_standing_envs = 0.15
+        # 제자리 회전 연습: 환경의 10% 는 이동 0, 회전 ±0.5~1.0 rad/s 고정 (박자 보상이 켜져 발을 번갈아 딛게 함)
+        # (정지 연습만 넣은 시험 5차는 '이동 0 = 서 있기' 로 일반화해 제자리 회전 중 넘어짐)
+        self.commands.base_velocity.rel_turn_envs = 0.1
+        # 속도 따라가기 보상을 날카롭게: std 0.5 → 0.3 (0.12m/s 부족 시 보상 94% → 85%)
+        # (1차 본 학습은 1.0m/s 명령에 0.87m/s. 덜 걸어도 보상을 거의 다 받는 구조라 보폭을 늘리지 않았음)
+        self.rewards.track_lin_vel_xy_exp.params["std"] = 0.3
+        # 상체 세우기: 골반 기울기 벌점 -1.0 → -3.0 (시험 7차에서 손 무게와 관계없이 뒤로 약 5.5° 젖힌 자세)
+        self.rewards.flat_orientation_l2.weight = -3.0
+        # 허리 비틀림: 허리 관절 벌점 -0.1 → -0.3 (시험 8차에서 허리가 평균 5~10° 한쪽으로 틀어진 채 걸음)
+        self.rewards.joint_deviation_torso.weight = -0.3
+        # 곧게 걷기: 회전 속도 따라가기 가중치 1.0 → 2.0 (G1 Rough 와 같은 값)
+        # (박자 보상이 최대 2.0 으로 커지면서 상대적으로 약해져, 직진 명령에 0.15 rad/s 로 휘어 걸음)
+        self.rewards.track_ang_vel_z_exp.weight = 2.0
 
 
 @configclass
@@ -240,3 +312,43 @@ class G1CarryGaitFlatEnvCfg_PLAY(G1CarryGaitFlatEnvCfg):
         self.observations.policy.enable_corruption = False
         self.events.base_external_force_torque = None
         self.events.push_robot = None
+
+
+# ===========================================================================
+# 근접 비교 영상용 설정 (Record): Play 설정을 상속해 카메라·환경 수·시작 방향·손 무게만 바꿈
+# 명령 순서(앞으로 걷기 → 정지)와 영상 저장 위치는 scripts/record_compare.py 가 정함
+# ===========================================================================
+
+RECORD_HAND_MASS = 2.5  # kg, 양손에 같은 무게를 더함 (학습 범위 0~5kg 의 가운데)
+
+
+def _apply_record_settings(cfg):
+    """한 대만 두고, 옆에서 따라가는 카메라로 찍기 위한 설정."""
+    cfg.scene.num_envs = 1
+    cfg.scene.env_spacing = 5.0
+    # 앞(+x)을 보고 시작 → 카메라를 -y 쪽에 두면 옆모습
+    cfg.events.reset_base.params["pose_range"] = {"x": (0.0, 0.0), "y": (0.0, 0.0), "yaw": (0.0, 0.0)}
+    cfg.events.add_hand_mass.params["mass_distribution_params"] = (RECORD_HAND_MASS, RECORD_HAND_MASS)
+    cfg.events.base_com = None
+    cfg.commands.base_velocity.debug_vis = False
+    # 카메라: 골반(root)을 따라감, 로봇 오른쪽 옆 1.8m·골반 높이에서 골반 아래 0.12m(키의 가운데 근처)를 봄
+    cfg.viewer.origin_type = "asset_root"
+    cfg.viewer.asset_name = "robot"
+    cfg.viewer.env_index = 0
+    cfg.viewer.eye = (0.0, -1.8, 0.0)
+    cfg.viewer.lookat = (0.0, 0.0, -0.12)
+    cfg.viewer.resolution = (640, 720)  # 두 영상을 좌우로 붙이면 1280x720
+
+
+@configclass
+class G1CarryFlatEnvCfg_RECORD(G1CarryFlatEnvCfg_PLAY):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_record_settings(self)
+
+
+@configclass
+class G1CarryGaitFlatEnvCfg_RECORD(G1CarryGaitFlatEnvCfg_PLAY):
+    def __post_init__(self):
+        super().__post_init__()
+        _apply_record_settings(self)

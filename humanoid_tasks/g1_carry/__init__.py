@@ -51,3 +51,24 @@ gym.register(
         "rsl_rl_cfg_entry_point": _GAIT_AGENT_CFG,
     },
 )
+
+# 근접 비교 영상용 (한 대, 옆에서 따라가는 카메라, scripts/record_compare.py 에서 사용)
+gym.register(
+    id="Humanoid-G1-Carry-Flat-Record-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_ENV_CFG}:G1CarryFlatEnvCfg_RECORD",
+        "rsl_rl_cfg_entry_point": _AGENT_CFG,
+    },
+)
+
+gym.register(
+    id="Humanoid-G1-Carry-Gait-Flat-Record-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_ENV_CFG}:G1CarryGaitFlatEnvCfg_RECORD",
+        "rsl_rl_cfg_entry_point": _GAIT_AGENT_CFG,
+    },
+)
