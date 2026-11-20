@@ -5,6 +5,14 @@
 - 팔 흔들림: 매 스텝 어깨·팔꿈치 관절의 (실제값 - 기본값) → 평균(꾸준한 처짐), 표준편차·최대(흔들림 폭)
 - 손 위치: 골반 기준 손 위치(cm)의 평균 이동, 표준편차, 최대-최소
 - 속도 따라가기: 명령과 실제 속도의 차이
+- 걸음 지표 (발 접촉 = 접촉 센서의 현재 접촉 시간 > 0, 발 = ankle_roll_link)
+  - 딛는 발 무릎 각도: 그 발이 닿아 있는 동안의 무릎 관절 각도 평균 (웅크림 정도)
+  - 골반 높이: 골반(root) 높이 평균 (평지라 지면 높이 0)
+  - 걸음/초: 발이 닿는 순간(공중 → 접촉) 횟수 ÷ 시간, 양발 합계
+  - 발 들어 올리는 높이: 한 번 옮기는 동안 발(링크 원점)의 최고 높이 − 닿는 순간 높이
+  - 한발 지지 / 양발 지지 / 양발 공중: 시간 비율
+  - 번갈아 딛기: 발이 닿을 때 직전에 닿은 발과 반대쪽인 비율 (L-R-L-R 이면 100%)
+  - 양발 좌우 간격: 골반 기준 좌우(y) 거리
 
 설정
 - 랜덤 밀기·외력 끔, 관측 노이즈 끔 (Play 설정)
@@ -138,6 +146,31 @@ yaw_err_sum = torch.zeros(N, device=device)
 vx_sum = torch.zeros(N, device=device)
 wz_sum = torch.zeros(N, device=device)
 
+# 걸음 지표용
+contact_sensor = unwrapped.scene.sensors["contact_forces"]
+foot_sensor_ids = [contact_sensor.body_names.index(f"{s}_ankle_roll_link") for s in SIDES]
+foot_body_ids = [robot.body_names.index(f"{s}_ankle_roll_link") for s in SIDES]
+knee_ids = [robot.joint_names.index(f"{s}_knee_joint") for s in SIDES]
+dt = unwrapped.step_dt
+g_stance_knee = torch.zeros(N, 2, device=device)
+g_stance_cnt = torch.zeros(N, 2, device=device)
+g_stance_footz = torch.zeros(N, 2, device=device)
+g_pelvis_z = torch.zeros(N, device=device)
+g_touchdowns = torch.zeros(N, device=device)
+g_swing_peak = torch.zeros(N, device=device)
+g_single = torch.zeros(N, device=device)
+g_double = torch.zeros(N, device=device)
+g_flight = torch.zeros(N, device=device)
+g_alt_hits = torch.zeros(N, device=device)
+g_alt_total = torch.zeros(N, device=device)
+g_feet_lat = torch.zeros(N, device=device)
+contact_hist = torch.zeros(T, N, 2, dtype=torch.bool, device=device)  # 접촉 패턴·구간 길이 진단용
+footz_hist = torch.zeros(T, N, 2, device=device)  # 떨림을 걸러낸 걸음 지표용 발 높이
+lift_hist = torch.full((T, N, 2), float("nan"), device=device)  # 발이 닿는 순간의 들어 올린 높이
+prev_contact = torch.ones(N, 2, dtype=torch.bool, device=device)
+swing_max = torch.zeros(N, 2, device=device)
+last_td_foot = torch.full((N,), -1, dtype=torch.long, device=device)
+
 
 def hand_pos_in_pelvis() -> torch.Tensor:
     """손(palm) 링크 위치, 골반(root) 기준 좌표 (N, 2, 3), 단위 m."""
@@ -172,6 +205,37 @@ with torch.inference_mode():
         vx_sum += v * robot.data.root_lin_vel_b[:, 0]
         wz_sum += v * robot.data.root_ang_vel_b[:, 2]
 
+        # ---- 걸음 지표 ----
+        contact = contact_sensor.data.current_contact_time[:, foot_sensor_ids] > 0.0  # (N, 2)
+        cf = contact.float()
+        foot_z = robot.data.body_pos_w[:, foot_body_ids, 2]  # (N, 2)
+        g_stance_knee += robot.data.joint_pos[:, knee_ids] * cf * v[:, None]
+        g_stance_cnt += cf * v[:, None]
+        g_stance_footz += foot_z * cf * v[:, None]
+        g_pelvis_z += robot.data.root_pos_w[:, 2] * v
+        n_contact = contact.sum(dim=1)
+        g_single += (n_contact == 1).float() * v
+        g_double += (n_contact == 2).float() * v
+        g_flight += (n_contact == 0).float() * v
+        # 발이 닿는 순간: 들어 올린 동안의 최고 높이 − 닿는 순간 높이
+        td = contact & ~prev_contact & valid[:, None]
+        contact_hist[t] = contact
+        footz_hist[t] = foot_z
+        lift_hist[t] =torch.where(td, swing_max - foot_z, torch.full_like(foot_z, float("nan")))
+        g_swing_peak += ((swing_max - foot_z) * td.float()).sum(dim=1)
+        g_touchdowns += td.float().sum(dim=1)
+        for f in range(2):
+            ev = td[:, f]
+            has_last = last_td_foot >= 0
+            g_alt_total += (ev & has_last).float()
+            g_alt_hits += (ev & has_last & (last_td_foot != f)).float()
+            last_td_foot = torch.where(ev, torch.full_like(last_td_foot, f), last_td_foot)
+        swing_max = torch.where(contact, foot_z, torch.maximum(swing_max, foot_z))
+        prev_contact = contact
+        # 양발 좌우 간격 (골반 기준 y)
+        rel = (robot.data.body_pos_w[:, foot_body_ids[0]] - robot.data.body_pos_w[:, foot_body_ids[1]])
+        g_feet_lat += quat_apply_inverse(robot.data.root_quat_w, rel)[:, 1].abs() * v
+
 # ---- 통계 (환경·관절별, 유효 스텝만) ----
 m = mask_hist.float()
 cnt = m.sum(0).clamp(min=1)  # (N,)
@@ -199,6 +263,21 @@ vx_mean = (vx_sum / cnt).cpu()
 wz_mean = (wz_sum / cnt).cpu()
 falls = falls.cpu()
 valid_frac = (m.sum(0) / T).cpu()
+
+# 걸음 지표 (환경별)
+valid_steps = m.sum(0)  # (N,)
+gait = {
+    "knee": ((g_stance_knee.sum(1) / g_stance_cnt.sum(1).clamp(min=1)) * RAD2DEG).cpu(),  # 딛는 발 무릎 (deg)
+    "pelvis": (g_pelvis_z / cnt * 100).cpu(),  # cm
+    "cadence": (g_touchdowns / (valid_steps * dt).clamp(min=1e-6)).cpu(),  # 걸음/초
+    "lift": (g_swing_peak / g_touchdowns.clamp(min=1) * 100).cpu(),  # cm
+    "single": (g_single / cnt * 100).cpu(),
+    "double": (g_double / cnt * 100).cpu(),
+    "flight": (g_flight / cnt * 100).cpu(),
+    "alt": (g_alt_hits / g_alt_total.clamp(min=1) * 100).cpu(),
+    "feet_lat": (g_feet_lat / cnt * 100).cpu(),  # cm
+    "stance_footz": ((g_stance_footz.sum(1) / g_stance_cnt.sum(1).clamp(min=1)) * 100).cpu(),  # cm
+}
 
 
 def jcol(side: int, name: str) -> int:
@@ -273,6 +352,129 @@ for s, (name, c) in enumerate(SCENARIOS):
     r = summarize(scen_of_env == s)
     print(f"{name:16s} {c[0]:8.2f} {r['vx']:8.3f} {c[2]:8.2f} {r['wz']:8.3f} {r['lin_err']:10.3f} {r['yaw_err']:9.3f}")
 
+def print_gait_table(title: str, rows: list[tuple[str, torch.Tensor]]):
+    print(f"\n========== 걸음 지표: {title} ==========")
+    print(f"{'구분':16s} {'딛는발무릎':>9s} {'골반높이':>8s} {'걸음/초':>7s} {'발높이':>7s} "
+          f"{'한발지지':>8s} {'양발지지':>8s} {'양발공중':>8s} {'번갈아':>7s} {'발간격':>7s}")
+    for name, sel in rows:
+        g = {k: v[sel].mean().item() for k, v in gait.items()}
+        print(f"{name:16s} {g['knee']:8.1f}° {g['pelvis']:6.1f}cm {g['cadence']:7.2f} {g['lift']:5.1f}cm "
+              f"{g['single']:7.1f}% {g['double']:7.1f}% {g['flight']:7.1f}% {g['alt']:6.1f}% {g['feet_lat']:5.1f}cm")
+
+
+print_gait_table("명령 시나리오별 (모든 무게)", [(SCENARIOS[s][0], scen_of_env == s) for s in range(n_scen)])
+print_gait_table("무게 구간별 (모든 시나리오)", [(bin_name(b), bin_of_env == b) for b in range(n_bins)])
+walk_sel = scen_of_env != 0
+print_gait_table("걷는 시나리오(천천히·빠르게·회전) × 무게",
+                 [(bin_name(b), walk_sel & (bin_of_env == b)) for b in range(n_bins)])
+print(f"[eval] 딛고 있는 발(ankle_roll_link 원점) 높이 평균: {gait['stance_footz'].mean().item():.2f} cm")
+
+
+def phase_durations(c: torch.Tensor, value: bool) -> list[int]:
+    """1차원 접촉 기록에서 value(True=접촉, False=공중)가 이어진 구간 길이(스텝) 목록. 처음·끝 구간은 뺌."""
+    out, run, started = [], 0, False
+    for x in c.tolist():
+        if x == value:
+            run += 1
+        else:
+            if run > 0 and started:
+                out.append(run)
+            run, started = 0, True
+    return out
+
+
+# ---- 떨림을 걸러낸 걸음 지표 ----
+# 0.02~0.04초짜리 접촉 떨림(딛는 발이 잠깐 떨어지거나, 옮기는 발이 잠깐 스침)을 걸음으로 세지 않도록
+# 접촉 기록에서 2스텝 이하 공중 틈은 접촉으로 메우고(closing), 2스텝 이하 접촉은 공중으로 지운다(opening).
+def _dilate(x: torch.Tensor, r: int) -> torch.Tensor:  # x: (B, T) float, 시간축 최대 필터
+    return torch.nn.functional.max_pool1d(x[:, None], 2 * r + 1, stride=1, padding=r)[:, 0]
+
+
+def _erode(x: torch.Tensor, r: int) -> torch.Tensor:
+    return 1.0 - _dilate(1.0 - x, r)
+
+
+DEBOUNCE_R = 1  # 반지름 1 → 길이 2 이하 구간을 걸러냄
+c_seq = contact_hist.permute(1, 2, 0).reshape(N * 2, T).float()
+c_seq = _erode(_dilate(c_seq, DEBOUNCE_R), DEBOUNCE_R)  # closing: 짧은 공중 틈 메우기
+c_seq = _dilate(_erode(c_seq, DEBOUNCE_R), DEBOUNCE_R)  # opening: 짧은 접촉 지우기
+dc = c_seq.reshape(N, 2, T).permute(2, 0, 1) > 0.5  # (T, N, 2)
+fz = footz_hist
+vmask = mask_hist  # (T, N)
+d_td = torch.zeros(N, device=device)
+d_lift_sum = torch.zeros(N, device=device)
+d_single = torch.zeros(N, device=device)
+d_double = torch.zeros(N, device=device)
+d_flight = torch.zeros(N, device=device)
+d_alt_hits = torch.zeros(N, device=device)
+d_alt_total = torch.zeros(N, device=device)
+d_last = torch.full((N,), -1, dtype=torch.long, device=device)
+d_swing_max = fz[0].clone()
+for t in range(1, T):
+    c, pc, v = dc[t], dc[t - 1], vmask[t]
+    vf = v.float()
+    nc = c.sum(dim=1)
+    d_single += (nc == 1).float() * vf
+    d_double += (nc == 2).float() * vf
+    d_flight += (nc == 0).float() * vf
+    td_d = c & ~pc & v[:, None]
+    d_lift_sum += ((d_swing_max - fz[t]) * td_d.float()).sum(dim=1)
+    d_td += td_d.float().sum(dim=1)
+    for f in range(2):
+        ev = td_d[:, f]
+        has_last = d_last >= 0
+        d_alt_total += (ev & has_last).float()
+        d_alt_hits += (ev & has_last & (d_last != f)).float()
+        d_last = torch.where(ev, torch.full_like(d_last, f), d_last)
+    d_swing_max = torch.where(c, fz[t], torch.maximum(d_swing_max, fz[t]))
+gait_d = {
+    "cadence": (d_td / (valid_steps * dt).clamp(min=1e-6)).cpu(),
+    "lift": (d_lift_sum / d_td.clamp(min=1) * 100).cpu(),
+    "single": (d_single / cnt * 100).cpu(),
+    "double": (d_double / cnt * 100).cpu(),
+    "flight": (d_flight / cnt * 100).cpu(),
+    "alt": (d_alt_hits / d_alt_total.clamp(min=1) * 100).cpu(),
+}
+print("\n========== 떨림을 걸러낸 걸음 지표 (2스텝 이하 공중 틈·접촉 제거) ==========")
+print(f"{'구분':16s} {'걸음/초':>7s} {'발높이':>7s} {'한발지지':>8s} {'양발지지':>8s} {'양발공중':>8s} {'번갈아':>7s}")
+for s in range(n_scen):
+    sel = scen_of_env == s
+    g = {k: v[sel].mean().item() for k, v in gait_d.items()}
+    print(f"{SCENARIOS[s][0]:16s} {g['cadence']:7.2f} {g['lift']:5.1f}cm {g['single']:7.1f}% {g['double']:7.1f}% "
+          f"{g['flight']:7.1f}% {g['alt']:6.1f}%")
+for s in range(n_scen):
+    e = int((scen_of_env == s).nonzero().flatten()[0])
+    c = dc[args_cli.warmup:args_cli.warmup + 100, e].cpu()
+    chars = "".join("B" if l and r else "L" if l else "R" if r else "." for l, r in c.tolist())
+    print(f"{SCENARIOS[s][0]:16s} {chars}")
+
+# 진단: 공중·접촉 구간 길이 분포 (유효 구간, 시나리오별 앞 20개 환경)
+print("\n========== 진단: 한 발의 공중·접촉 구간 길이 분포 (스텝, 1스텝 = 0.02초) ==========")
+w0 = args_cli.warmup
+for s in range(n_scen):
+    envs = (scen_of_env == s).nonzero().flatten()[:20].tolist()
+    air, stance = [], []
+    for e in envs:
+        for f in range(2):
+            c = contact_hist[w0:, e, f].cpu()
+            air += phase_durations(c, False)
+            stance += phase_durations(c, True)
+    a, st = torch.tensor(air, dtype=torch.float), torch.tensor(stance, dtype=torch.float)
+    print(f"{SCENARIOS[s][0]:16s} 공중 {len(air):5d}개: 1~2스텝 {(a <= 2).float().mean() * 100:5.1f}%, 중앙값 {a.median():.0f}, "
+          f"평균 {a.mean():.1f} | 접촉 {len(stance):5d}개: 1~2스텝 {(st <= 2).float().mean() * 100:5.1f}%, 중앙값 {st.median():.0f}, 평균 {st.mean():.1f}")
+    lifts = lift_hist[w0:, envs].flatten()
+    lifts = lifts[~torch.isnan(lifts)].cpu() * 100
+    print(f"{'':16s} 닿는 순간 들어 올린 높이(cm): 2cm 미만 {(lifts < 2).float().mean() * 100:5.1f}%, "
+          f"중앙값 {lifts.median():.1f}, 상위 10% {lifts.quantile(0.9):.1f}")
+
+# 진단: 접촉 패턴 (L=왼발만, R=오른발만, B=양발, .=공중), 시나리오별 첫 환경, 유효 구간 처음 100스텝(2초)
+print("\n========== 진단: 접촉 패턴 (L 왼발만, R 오른발만, B 양발, . 공중 / 1글자 = 0.02초) ==========")
+for s in range(n_scen):
+    e = int((scen_of_env == s).nonzero().flatten()[0])
+    c = contact_hist[w0:w0 + 100, e].cpu()
+    chars = "".join("B" if l and r else "L" if l else "R" if r else "." for l, r in c.tolist())
+    print(f"{SCENARIOS[s][0]:16s} {chars}")
+
 print("\n========== 시나리오 × 무게: 어깨 pitch 흔들림 std 평균(deg) / 손 z 폭 평균(cm) / 넘어진 환경 ==========")
 print(f"{'시나리오':16s} " + " ".join(f"{bin_name(b):>20s}" for b in range(n_bins)))
 for s in range(n_scen):
@@ -287,11 +489,12 @@ out_csv = os.path.join(os.path.dirname(resume_path), "eval_carry.csv")
 with open(out_csv, "w", newline="", encoding="utf-8") as f:
     w = csv.writer(f)
     w.writerow(["env", "scenario", "added_mass_kg", "falls", "lin_err", "yaw_err", "vx", "wz"]
-               + [f"{k}_{s}" for k in arm for s in SIDES])
+               + [f"{k}_{s}" for k in arm for s in SIDES] + [f"gait_{k}" for k in gait])
     for i in range(N):
         w.writerow([i, SCENARIOS[int(scen_of_env[i])][0], round(added_mass[i].item(), 3), int(falls[i]),
                     round(lin_err[i].item(), 4), round(yaw_err[i].item(), 4), round(vx_mean[i].item(), 4), round(wz_mean[i].item(), 4)]
-                   + [round(arm[k][i, si].item(), 4) for k in arm for si in range(2)])
+                   + [round(arm[k][i, si].item(), 4) for k in arm for si in range(2)]
+                   + [round(gait[k][i].item(), 4) for k in gait])
 print(f"\n[eval] 환경별 원자료: {out_csv}")
 
 env.close()
