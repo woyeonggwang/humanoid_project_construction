@@ -419,3 +419,86 @@ class G1CarryGaitArmRandFlatEnvCfg_PLAY(G1CarryGaitArmRandFlatEnvCfg):
         self.observations.policy.enable_corruption = False
         self.events.base_external_force_torque = None
         self.events.push_robot = None
+
+
+# ===========================================================================
+# 걷기 정책 v2 (Humanoid-G1-Loco-V2-Flat-v0, loco_v2 브랜치)
+# 팔 무작위판(4단계 비교 기준)을 상속해, 5단계에서 스크립트로 메운 한계를 학습으로 없앤다.
+#   1. 팔 관절 전체(어깨 pitch·roll·yaw, 팔꿈치 pitch·roll)와 손가락 무작위화 → 정책 관측 거르기 불필요
+#   2. 뒤로 걷기 명령 → 받침대에서 뒤로 물러나기
+#   3. 명령을 2~5초마다 바꾸고 정지 비율을 높임 + 정지 명령이 와도 걸음을 마무리한 뒤 정지 상태로 → 어느 박자에서든 멈추기
+#   4. 걸을 때 뒤로 젖히기 벌점(앞으로 숙이기는 약하게), 서 있을 때 무릎 하한
+# ===========================================================================
+
+# 왼팔 기준 무작위 범위 (rad): 어깨 pitch, 어깨 roll, 어깨 yaw, 팔꿈치 pitch, 팔꿈치 roll. 오른팔은 roll·yaw 부호를 뒤집음.
+# 5단계 pick_place 의 IK 가 쓴 관절 범위(CLAUDE.md 6단계 표)를 포함하고, 기존 무작위 범위(어깨 pitch -1.2~0.3, 팔꿈치 0.3~1.5)도 포함
+ARM_WIDE_RANGES = ((-1.6, 0.4), (0.0, 0.9), (-0.3, 0.3), (0.0, 1.8), (-0.2, 0.2))
+
+
+@configclass
+class LocoV2EventCfg(CarryEventCfg):
+    arm_motion = EventTerm(
+        func=carry_mdp.randomize_upper_body_targets,
+        mode="interval",
+        interval_range_s=(0.0, 0.0),
+        is_global_time=True,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "change_interval_s": (2.0, 5.0),
+            "random_prob": 0.5,
+            "random_prob_standing": 0.8,
+            "symmetric_prob": 0.5,
+            "arm_ranges": ARM_WIDE_RANGES,
+            "finger_prob": 0.5,  # 무작위 자세 중 절반은 손가락도 관절 한계 안에서 무작위 (엄지를 펴고 접는 동작 대비)
+            "max_speed": 2.0,
+            "command_name": "base_velocity",
+            "stand_threshold": 0.1,
+        },
+    )
+
+
+@configclass
+class LocoV2RewardsCfg(ArmRandRewardsCfg):
+    # 걸을 때 뒤로 젖히기 억제: 뒤로 3° 넘으면 넘은 만큼, 앞으로 6° 넘으면 0.3배로 약하게. 서 있을 때(-20)보다 낮은 가중치
+    walk_pitch = RewTerm(
+        func=carry_mdp.walk_pitch_range_l1,
+        weight=-5.0,
+        params={"command_name": "base_velocity", "stand_threshold": 0.1,
+                "back_limit": 0.05, "forward_limit": 0.105, "forward_scale": 0.3},
+    )
+    # 서 있을 때 무릎 하한 0.10 rad(약 6°): 끝까지 펴고 서는 자세 방지
+    stand_knee = RewTerm(
+        func=carry_mdp.stand_knee_min,
+        weight=-5.0,
+        params={"command_name": "base_velocity", "stand_threshold": 0.1, "min_angle": 0.10,
+                "asset_cfg": SceneEntityCfg("robot", joint_names=KNEES, preserve_order=True)},
+    )
+
+
+@configclass
+class G1LocoV2FlatEnvCfg(G1CarryGaitFlatEnvCfg):
+    events: LocoV2EventCfg = LocoV2EventCfg()
+    rewards: LocoV2RewardsCfg = LocoV2RewardsCfg()
+    # 정지 명령이 와도 박자상 양발이 함께 닿는 구간까지 걸음을 마무리한 뒤 정지 상태로 바꿈 (carry_mdp.is_standing_command)
+    stand_latch_period: float = GAIT_PERIOD
+    stand_latch_overlap: float = STANCE_RATIO - 0.5
+
+    def __post_init__(self):
+        super().__post_init__()
+        cmd = self.commands.base_velocity
+        cmd.ranges.lin_vel_x = (-0.5, 1.0)  # 뒤로 걷기 (기존 0~1)
+        cmd.resampling_time_range = (2.0, 5.0)  # 명령을 자주 바꿈 (기존 10초) → 걷기·정지·방향 전환을 한 에피소드에 여러 번
+        cmd.rel_standing_envs = 0.25  # 정지 명령 비율 (기존 0.15)
+
+
+@configclass
+class G1LocoV2FlatEnvCfg_PLAY(G1LocoV2FlatEnvCfg):
+    """영상 확인용 (G1CarryFlatEnvCfg_PLAY 와 같은 변경). 팔·손가락 무작위 움직임은 켜 둠."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.scene.num_envs = 50
+        self.scene.env_spacing = 2.5
+        self.observations.policy.enable_corruption = False
+        self.events.base_external_force_torque = None
+        self.events.push_robot = None

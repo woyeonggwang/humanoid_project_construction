@@ -24,6 +24,8 @@
 - --arm_motion: 어깨·팔꿈치 pitch 목표값을 미리 정한 순서로 움직임 (팔 무작위판 1차 학습 이벤트와 같은 규칙·범위·속도로 고정,
   난수는 --seed 로 고정 → 어느 정책이든 같은 팔 움직임). 학습 과제에 팔 무작위 이벤트가 있어도 평가에서는 끄고 이 순서를 씀
   이때 팔 처짐·흔들림·손 위치 값은 일부러 움직인 몫이 섞이므로 의미 없음 (넘어짐·속도·걸음·자세 지표를 봄)
+  --arm_motion wide: 걷기 정책 v2 의 넓힌 범위 (팔 관절 10개 + 손가락, carry_mdp.randomize_upper_body_targets 와 같은 규칙)
+- --scenarios back: 명령 시나리오를 뒤로 걷기 두 가지(-0.3, -0.5m/s)로 바꿈 (기본 네 가지와 따로 실행해 기존 결과와 환경 배정이 같게 유지)
 
 예) python -u scripts\\eval_carry.py --headless --load_run 2026-11-19_17-33-52
 """
@@ -44,7 +46,10 @@ parser.add_argument("--per_cell", type=int, default=50, help="시나리오 × �
 parser.add_argument("--steps", type=int, default=1000, help="진행 스텝 수 (50스텝 = 1초, 에피소드 최대 1000)")
 parser.add_argument("--warmup", type=int, default=50, help="에피소드 시작 후 흔들림 통계에서 뺄 스텝 수")
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--arm_motion", action="store_true", default=False, help="어깨·팔꿈치 목표값을 무작위 순서로 움직임")
+parser.add_argument("--arm_motion", nargs="?", const="narrow", default=None, choices=["narrow", "wide"],
+                    help="팔 목표값을 무작위 순서로 움직임. narrow(값 없이 쓰면 이것): 어깨·팔꿈치 pitch, wide: 팔 관절 10개 + 손가락")
+parser.add_argument("--scenarios", type=str, default="default", choices=["default", "back"],
+                    help="back: 뒤로 걷기 두 가지로 바꿈")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 
@@ -72,6 +77,8 @@ SCENARIOS = [
     ("빠르게 1.0m/s", (1.0, 0.0, 0.0)),
     ("회전 1.0rad/s", (0.0, 0.0, 1.0)),
 ]
+if args_cli.scenarios == "back":
+    SCENARIOS = [("뒤로 0.3m/s", (-0.3, 0.0, 0.0)), ("뒤로 0.5m/s", (-0.5, 0.0, 0.0))]
 MASS_BINS = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0), (4.0, 5.0)]  # 손 하나에 더하는 무게 (kg)
 ARM_JOINTS = ["shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow_pitch", "elbow_roll"]
 SIDES = ("left", "right")
@@ -144,8 +151,9 @@ target_cmd = torch.tensor([c for _, c in SCENARIOS], device=device)[scen_of_env.
 from humanoid_tasks.g1_carry import carry_mdp  # noqa: E402
 
 arm_target_ids = [robot.joint_names.index(n) for n in carry_mdp.ARM_TARGET_JOINTS]
-arm_sched = None
-if args_cli.arm_motion:
+arm_sched = None  # (스텝, 환경, 관절) 목표값
+arm_sched_pitch = None  # 넘어짐 진단용: [왼 어깨 pitch, 오른 어깨 pitch, 왼 팔꿈치 pitch, 오른 팔꿈치 pitch]
+if args_cli.arm_motion == "narrow":
     # 평가 조건은 고정 (팔 무작위판 1차 학습 이벤트와 같은 값). 학습 설정을 바꿔도 이전 결과와 비교할 수 있게 숫자로 둠
     ap = {"change_interval_s": (2.0, 5.0), "random_prob": 0.5, "symmetric_prob": 0.5,
           "shoulder_range": (-1.2, 0.3), "elbow_range": (0.3, 1.5), "max_speed": 2.0}
@@ -167,9 +175,45 @@ if args_cli.arm_motion:
         cur = carry_mdp.step_toward(cur, goal, ap["max_speed"] * unwrapped.step_dt)
         sched[t] = cur
     arm_sched = sched.to(device)
+    arm_sched_pitch = arm_sched
     moved = ((sched - carry[None]).abs() > 0.05).any(dim=-1).float().mean().item()
     print(f"[eval] 팔 움직임 순서: 간격 {ap['change_interval_s']}초, 무작위 비율 {ap['random_prob']}, 어깨 {ap['shoulder_range']}, "
           f"팔꿈치 {ap['elbow_range']}, 속도 {ap['max_speed']} rad/s → 짐 든 자세에서 벗어난 시간 비율 {moved * 100:.1f}%")
+elif args_cli.arm_motion == "wide":
+    # 걷기 정책 v2 의 넓힌 범위 (학습 이벤트 randomize_upper_body_targets 의 값을 숫자로 고정)
+    ap = {"change_interval_s": (2.0, 5.0), "random_prob": 0.5, "symmetric_prob": 0.5, "finger_prob": 0.5, "max_speed": 2.0,
+          "arm_ranges": ((-1.6, 0.4), (0.0, 0.9), (-0.3, 0.3), (0.0, 1.8), (-0.2, 0.2))}
+    arm_ids, _ = robot.find_joints(carry_mdp.ARM_WIDE_JOINTS, preserve_order=True)
+    finger_ids, _ = robot.find_joints(carry_mdp.FINGER_JOINT_EXPR)
+    arm_target_ids = list(arm_ids) + list(finger_ids)
+    n_arm = len(arm_ids)
+    ga = torch.Generator().manual_seed(args_cli.seed + 1)
+    carry = robot.data.default_joint_pos[:, arm_target_ids].cpu()
+    f_lim = robot.data.soft_joint_pos_limits[:, finger_ids].cpu()
+    cur, goal = carry.clone(), carry.clone()
+    lo_i, hi_i = ap["change_interval_s"]
+    t_left = lo_i + (hi_i - lo_i) * torch.rand(num_envs, generator=ga)
+    sched = torch.zeros(args_cli.steps, num_envs, len(arm_target_ids))
+    for t in range(args_cli.steps):
+        t_left -= unwrapped.step_dt
+        due = (t_left <= 0.0).nonzero().flatten()
+        if len(due) > 0:
+            u = torch.rand(len(due), 12, generator=ga)
+            arm_goal = carry_mdp.arm_goal_wide_from_uniform(u, carry[due][:, :n_arm], ap["arm_ranges"], ap["random_prob"],
+                                                            ap["symmetric_prob"])
+            v = torch.rand(len(due), len(finger_ids), generator=ga)
+            f_rand = f_lim[due][..., 0] + (f_lim[due][..., 1] - f_lim[due][..., 0]) * v
+            move_f = ((u[:, 0] < ap["random_prob"]) & (torch.rand(len(due), generator=ga) < ap["finger_prob"]))[:, None]
+            goal[due] = torch.cat([arm_goal, torch.where(move_f, f_rand, carry[due][:, n_arm:])], dim=1)
+            t_left[due] = lo_i + (hi_i - lo_i) * torch.rand(len(due), generator=ga)
+        cur = carry_mdp.step_toward(cur, goal, ap["max_speed"] * unwrapped.step_dt)
+        sched[t] = cur
+    arm_sched = sched.to(device)
+    arm_sched_pitch = arm_sched[:, :, [0, 5, 3, 8]]
+    moved = ((sched[..., :n_arm] - carry[None, :, :n_arm]).abs() > 0.05).any(dim=-1).float().mean().item()
+    print(f"[eval] 팔 움직임 순서 (넓힌 범위): 간격 {ap['change_interval_s']}초, 무작위 비율 {ap['random_prob']}, "
+          f"팔 범위(왼팔 기준 어깨 pitch·roll·yaw, 팔꿈치 pitch·roll) {ap['arm_ranges']}, 손가락 무작위 {ap['finger_prob']}, "
+          f"속도 {ap['max_speed']} rad/s → 짐 든 자세에서 벗어난 시간 비율 {moved * 100:.1f}%")
 
 # 기록할 관절·링크
 joint_ids = [robot.joint_names.index(f"{s}_{j}_joint") for s in SIDES for j in ARM_JOINTS]  # (좌 5, 우 5)
@@ -643,8 +687,8 @@ for s in range(n_scen):
     com_pre = com_hist[pre.to(device), ids.to(device)].cpu() * 100
     line = f"{SCENARIOS[s][0]:16s} {len(ids):3d}개 | 넘어지기 0.2초 전 무게중심 평균 {com_pre.mean():+.1f}cm (뒤쪽 {int((com_pre < 0).sum())}개)"
     if arm_sched is not None:
-        at = arm_sched[ft.to(device), ids.to(device)].cpu()  # (n, 4) [왼 어깨, 오른 어깨, 왼 팔꿈치, 오른 팔꿈치]
-        before = arm_sched[torch.clamp(ft - 50, min=0).to(device), ids.to(device)].cpu()
+        at = arm_sched_pitch[ft.to(device), ids.to(device)].cpu()  # (n, 4) [왼 어깨, 오른 어깨, 왼 팔꿈치, 오른 팔꿈치]
+        before = arm_sched_pitch[torch.clamp(ft - 50, min=0).to(device), ids.to(device)].cpu()
         sh = at[:, :2].mean(dim=1)
         dsh = (at[:, :2] - before[:, :2]).mean(dim=1)
         line += (f" | 넘어질 때 어깨 목표 평균 {sh.mean():+.2f} (양팔 −0.2 보다 뒤/아래 {int(((at[:, 0] > -0.2) & (at[:, 1] > -0.2)).sum())}개, "
@@ -702,7 +746,8 @@ for s in range(n_scen):
     print(f"{SCENARIOS[s][0]:16s} " + " ".join(f"{c:>20s}" for c in cells))
 
 # 환경별 원자료 저장 (학습 폴더, git 제외)
-out_csv = os.path.join(os.path.dirname(resume_path), "eval_carry_armmotion.csv" if args_cli.arm_motion else "eval_carry.csv")
+csv_name = {None: "eval_carry", "narrow": "eval_carry_armmotion", "wide": "eval_carry_armmotion_wide"}[args_cli.arm_motion]
+out_csv = os.path.join(os.path.dirname(resume_path), csv_name + ("_back" if args_cli.scenarios == "back" else "") + ".csv")
 with open(out_csv, "w", newline="", encoding="utf-8") as f:
     w = csv.writer(f)
     w.writerow(["env", "scenario", "added_mass_kg", "falls", "lin_err", "yaw_err", "vx", "wz"]

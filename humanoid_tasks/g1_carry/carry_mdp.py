@@ -67,9 +67,37 @@ def feet_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
 
 
 def is_standing_command(env: ManagerBasedRLEnv, command_name: str, stand_threshold: float) -> torch.Tensor:
-    """명령이 거의 0 인지 (N,): 선속도 크기·회전 속도 모두 stand_threshold 미만."""
+    """명령이 거의 0 인지 (N,): 선속도 크기·회전 속도 모두 stand_threshold 미만.
+
+    환경 설정에 `stand_latch_period`(걸음 주기, 초)가 있으면 '걸음을 마무리한 뒤의 정지 상태'를 돌려준다 (걷기 정책 v2):
+    정지 명령이 들어와도 박자상 양발이 함께 닿는 구간이 올 때까지는 걷는 중으로 보고, 그 구간에서 정지 상태로 바뀐다.
+    명령이 다시 걷기로 바뀌면 바로 풀린다. 박자 신호·박자 보상·서 있는 자세 벌점이 모두 이 함수를 쓰므로 함께 바뀐다.
+    """
     cmd = env.command_manager.get_command(command_name)
-    return (torch.norm(cmd[:, :2], dim=1) < stand_threshold) & (cmd[:, 2].abs() < stand_threshold)
+    standing = (torch.norm(cmd[:, :2], dim=1) < stand_threshold) & (cmd[:, 2].abs() < stand_threshold)
+    period = getattr(env.cfg, "stand_latch_period", None)
+    if period is None:
+        return standing
+    return _latched_standing(env, standing, period, getattr(env.cfg, "stand_latch_overlap", 0.05))
+
+
+def _latched_standing(env: ManagerBasedRLEnv, standing_cmd: torch.Tensor, period: float, overlap: float) -> torch.Tensor:
+    """정지 명령 → 정지 상태 전환을 '양발이 함께 닿는 박자 구간'까지 미룬 값. 한 스텝에 한 번만 갱신한다.
+
+    박자상 양발이 함께 닿는 구간: 위상 φ 가 [0, overlap) 또는 [0.5, 0.5 + overlap) (왼발 딛기 φ < 0.5 + overlap, 오른발은 반 주기 뒤).
+    리셋 직후(에피소드 0스텝)는 미루지 않고 명령 그대로 본다.
+    """
+    step = int(env.common_step_counter)
+    latch = getattr(env, "_stand_latch", None)
+    if latch is None or latch.shape != standing_cmd.shape:
+        env._stand_latch = standing_cmd.clone()
+        env._stand_latch_step = step
+    elif env._stand_latch_step != step:
+        phi = gait_phase(env, period)
+        both_feet = (phi < overlap + 0.01) | ((phi >= 0.5) & (phi < 0.5 + overlap + 0.01))
+        env._stand_latch = standing_cmd & (latch | both_feet)
+        env._stand_latch_step = step
+    return torch.where(env.episode_length_buf == 0, standing_cmd, env._stand_latch)
 
 
 def gait_contact(
@@ -369,3 +397,152 @@ class stand_com_range(ManagerTermBase):
         x = (com[:, 0] - mid[:, 0]) * torch.cos(yaw) + (com[:, 1] - mid[:, 1]) * torch.sin(yaw)
         excess = torch.clamp(min_x - x, min=0.0) + torch.clamp(x - max_x, min=0.0)
         return excess * is_standing_command(env, command_name, stand_threshold).float()
+
+
+# ---------------------------------------------------------------------------
+# 걷기 정책 v2 (loco_v2): 팔 관절 전체·손가락 무작위화, 걸을 때 뒤로 젖히기 억제, 서 있을 때 무릎 하한
+# ---------------------------------------------------------------------------
+
+# 무작위로 바꾸는 팔 관절 순서 (arm_ik.DualArmIK 와 같음): 왼팔 5개, 오른팔 5개
+ARM_WIDE_JOINTS = [f"{side}_{name}_joint" for side in ("left", "right")
+                   for name in ("shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow_pitch", "elbow_roll")]
+# 오른팔은 왼팔 범위를 좌우 대칭으로 뒤집어 씀 (roll·yaw 관절은 부호 반대)
+ARM_MIRROR_SIGN = (1.0, -1.0, -1.0, 1.0, -1.0)
+FINGER_JOINT_EXPR = [".*_zero_joint", ".*_one_joint", ".*_two_joint", ".*_three_joint", ".*_four_joint",
+                     ".*_five_joint", ".*_six_joint"]
+
+
+def arm_goal_wide_from_uniform(
+    u: torch.Tensor,
+    carry: torch.Tensor,
+    ranges,
+    random_prob: float | torch.Tensor,
+    symmetric_prob: float,
+) -> torch.Tensor:
+    """0~1 균일 난수 u (n, 12) → 팔 목표 자세 (n, 10), 순서는 ARM_WIDE_JOINTS.
+
+    - u[:, 0] < random_prob 이면 무작위 자세, 아니면 짐 든 자세(carry, (n, 10))
+    - u[:, 1] < symmetric_prob 이면 양팔 좌우 대칭 자세, 아니면 좌우 따로
+    - u[:, 2:7] = 왼팔 5개 관절, u[:, 7:12] = 오른팔
+    - ranges: 왼팔 기준 (최소, 최대) 5쌍. 오른팔은 ARM_MIRROR_SIGN 으로 뒤집음
+    학습 이벤트와 평가 스크립트(eval_carry.py --arm_motion wide)가 같은 규칙을 쓰도록 함수로 둠.
+    """
+    lo = torch.tensor([r[0] for r in ranges], device=u.device)
+    hi = torch.tensor([r[1] for r in ranges], device=u.device)
+    sign = torch.tensor(ARM_MIRROR_SIGN, device=u.device)
+    left = lo + (hi - lo) * u[:, 2:7]
+    sym = (u[:, 1] < symmetric_prob)[:, None]
+    right = torch.where(sym, left, lo + (hi - lo) * u[:, 7:12]) * sign
+    rand_goal = torch.cat([left, right], dim=1)
+    return torch.where((u[:, 0] < random_prob)[:, None], rand_goal, carry)
+
+
+class randomize_upper_body_targets(ManagerTermBase):
+    """interval 이벤트 (매 스텝 호출): 팔 관절 10개와 손가락 14개의 모터 목표값을 무작위 자세로 옮긴다.
+
+    randomize_arm_targets(어깨·팔꿈치 pitch 만)를 넓힌 것. 이유 (2026-11-22, 5단계):
+    IK 가 어깨 roll·yaw 를 움직이자 그 관절이 바뀌는 것을 본 적 없는 정책이 넘어져, 정책에 넣는 관측을 걸러야 했음.
+    손가락도 같은 이유로 움직일 수 없었음 (엄지를 펴서 상자에 손바닥을 붙이지 못함).
+    - 새 목표는 환경마다 change_interval_s 간격. random_prob 확률로 무작위 자세(팔 + 손가락), 아니면 짐 든 자세
+    - 손가락은 무작위 자세일 때 finger_prob 확률로 관절 한계 안의 무작위 값, 아니면 기본 자세
+    - 목표값은 max_speed(rad/s) 로 옮김. 리셋되면 짐 든 자세에서 다시 시작
+    """
+
+    def __init__(self, cfg, env: ManagerBasedRLEnv):
+        super().__init__(cfg, env)
+        self.asset = env.scene[cfg.params["asset_cfg"].name]
+        self.arm_ids, _ = self.asset.find_joints(ARM_WIDE_JOINTS, preserve_order=True)
+        self.finger_ids, _ = self.asset.find_joints(FINGER_JOINT_EXPR)
+        self.joint_ids = list(self.arm_ids) + list(self.finger_ids)
+        self.n_arm = len(self.arm_ids)
+        self.carry = self.asset.data.default_joint_pos[:, self.joint_ids].clone()
+        limits = self.asset.data.soft_joint_pos_limits[:, self.finger_ids]
+        self.finger_lo, self.finger_hi = limits[..., 0].clone(), limits[..., 1].clone()
+        self.goal = self.carry.clone()
+        self.current = self.carry.clone()
+        self.time_left = self._sample_interval(env.num_envs, cfg.params["change_interval_s"])
+
+    def _sample_interval(self, n: int, interval) -> torch.Tensor:
+        lo, hi = interval
+        return lo + (hi - lo) * torch.rand(n, device=self.device)
+
+    def reset(self, env_ids=None):
+        if env_ids is None:
+            env_ids = slice(None)
+            n = self.num_envs
+        else:
+            n = len(env_ids)
+        self.goal[env_ids] = self.carry[env_ids]
+        self.current[env_ids] = self.carry[env_ids]
+        self.time_left[env_ids] = self._sample_interval(n, self.cfg.params["change_interval_s"])
+
+    def __call__(
+        self,
+        env: ManagerBasedRLEnv,
+        env_ids: torch.Tensor | None,
+        asset_cfg: SceneEntityCfg,
+        change_interval_s,
+        random_prob: float,
+        symmetric_prob: float,
+        arm_ranges,
+        finger_prob: float,
+        max_speed: float,
+        random_prob_standing: float | None = None,
+        command_name: str = "base_velocity",
+        stand_threshold: float = 0.1,
+    ):
+        self.time_left -= env.step_dt
+        due = (self.time_left <= 0.0).nonzero().flatten()
+        if len(due) > 0:
+            n = len(due)
+            u = torch.rand(n, 12, device=self.device)
+            prob = random_prob
+            if random_prob_standing is not None:
+                standing = is_standing_command(env, command_name, stand_threshold)[due]
+                prob = torch.where(standing, random_prob_standing, random_prob)
+            carry = self.carry[due]
+            arm_goal = arm_goal_wide_from_uniform(u, carry[:, : self.n_arm], arm_ranges, prob, symmetric_prob)
+            v = torch.rand(n, len(self.finger_ids), device=self.device)
+            finger_rand = self.finger_lo[due] + (self.finger_hi[due] - self.finger_lo[due]) * v
+            move_fingers = ((u[:, 0] < prob) & (torch.rand(n, device=self.device) < finger_prob))[:, None]
+            finger_goal = torch.where(move_fingers, finger_rand, carry[:, self.n_arm:])
+            self.goal[due] = torch.cat([arm_goal, finger_goal], dim=1)
+            self.time_left[due] = self._sample_interval(n, change_interval_s)
+        self.current = step_toward(self.current, self.goal, max_speed * env.step_dt)
+        self.asset.set_joint_position_target(self.current, joint_ids=self.joint_ids)
+
+
+def walk_pitch_range_l1(
+    env: ManagerBasedRLEnv,
+    command_name: str,
+    stand_threshold: float,
+    back_limit: float,
+    forward_limit: float,
+    forward_scale: float,
+    asset_cfg: SceneEntityCfg = SceneEntityCfg("robot"),
+) -> torch.Tensor:
+    """벌점: 걷는 동안(정지 상태가 아닐 때) 골반 앞뒤 기울기가 허용 범위를 벗어난 만큼 (rad).
+
+    기울기 = 골반 좌표에서 본 중력 방향으로 계산 (+ 앞으로 숙임). 뒤로는 back_limit, 앞으로는 forward_limit 까지 벌점 0.
+    뒤로 넘은 만큼은 그대로, 앞으로 넘은 만큼은 forward_scale 배로 약하게 (앞으로 조금 숙이는 걸음은 허용).
+    이유 (2026-11-20 팔 무작위판 처음부터 학습): 천천히 걸을 때 -10.8°, 회전할 때 -13.2° 로 뒤로 젖힘.
+    서 있을 때의 기울기는 stand_flat_orientation_l2 가 맡는다.
+    """
+    asset = env.scene[asset_cfg.name]
+    grav = asset.data.projected_gravity_b
+    pitch = torch.atan2(grav[:, 0], -grav[:, 2])
+    excess = torch.clamp(-pitch - back_limit, min=0.0) + forward_scale * torch.clamp(pitch - forward_limit, min=0.0)
+    return excess * (~is_standing_command(env, command_name, stand_threshold)).float()
+
+
+def stand_knee_min(
+    env: ManagerBasedRLEnv, command_name: str, stand_threshold: float, asset_cfg: SceneEntityCfg, min_angle: float
+) -> torch.Tensor:
+    """벌점: 정지 상태에서 무릎이 min_angle(rad) 보다 펴진 만큼 (양 무릎 합).
+
+    stance_knee_range(-1.0)의 하한 0.05 rad 로는 약해서, 팔 무작위판 처음부터 학습은 서 있을 때 무릎을 끝까지 폄 (-1.6°).
+    """
+    asset = env.scene[asset_cfg.name]
+    knee = asset.data.joint_pos[:, asset_cfg.joint_ids]
+    short = torch.sum(torch.clamp(min_angle - knee, min=0.0), dim=1)
+    return short * is_standing_command(env, command_name, stand_threshold).float()

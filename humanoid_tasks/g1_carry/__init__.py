@@ -118,3 +118,47 @@ gym.register(
         "rsl_rl_cfg_entry_point": _ARMRAND_AGENT_CFG,
     },
 )
+
+# 걷기 정책 v2: 팔 관절 전체·손가락 무작위화, 뒤로 걷기, 걸음을 마무리한 뒤 정지, 걸을 때 뒤로 젖히기 억제
+_LOCO_V2_AGENT_CFG = "humanoid_tasks.g1_carry.agents:G1LocoV2FlatPPORunnerCfg"
+
+gym.register(
+    id="Humanoid-G1-Loco-V2-Flat-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_ENV_CFG}:G1LocoV2FlatEnvCfg",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)
+
+gym.register(
+    id="Humanoid-G1-Loco-V2-Flat-Play-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_ENV_CFG}:G1LocoV2FlatEnvCfg_PLAY",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)
+
+# 걷기 정책 v2 로 상자 집어 옮기기 (6단계)
+gym.register(
+    id="Humanoid-G1-ArmIK-V2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_PICK_CFG}:G1ArmIKV2EnvCfg",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)
+
+gym.register(
+    id="Humanoid-G1-PickPlace-V2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_PICK_CFG}:G1PickPlaceV2EnvCfg",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)

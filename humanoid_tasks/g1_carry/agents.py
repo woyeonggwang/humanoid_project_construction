@@ -32,3 +32,14 @@ class G1CarryGaitArmRandFlatPPORunnerCfg(G1FlatPPORunnerCfg):
         super().__post_init__()
         self.experiment_name = "g1_carry_gait_flat"
         self.run_name = "armrand"
+
+
+@configclass
+class G1LocoV2FlatPPORunnerCfg(G1FlatPPORunnerCfg):
+    """걷기 정책 v2. 기록 폴더는 걸음 보상 추가판과 같게 두고(pick_place 스크립트가 같은 폴더에서 체크포인트를 찾음)
+    실행 폴더 이름 끝에 '_loco_v2' 를 붙여 구분한다."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        self.experiment_name = "g1_carry_gait_flat"
+        self.run_name = "loco_v2"
