@@ -142,7 +142,7 @@ gym.register(
     },
 )
 
-# 걷기 정책 v2 로 상자 집어 옮기기 (6단계)
+# 걷기 정책 v2 로 상자 집어 옮기기 (6단계), VLM 판단 층용 장면 (7단계: 받침대 3개·색 상자 4개·머리 카메라)
 gym.register(
     id="Humanoid-G1-ArmIK-V2-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
@@ -159,6 +159,16 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{_PICK_CFG}:G1PickPlaceV2EnvCfg",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)
+
+gym.register(
+    id="Humanoid-G1-VLM-Scene-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "humanoid_tasks.g1_carry.vlm_scene_cfg:G1VlmSceneEnvCfg",
         "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
     },
 )

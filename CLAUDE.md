@@ -19,9 +19,12 @@
 humanoid_project/
 ├─ humanoid_tasks/g1_carry/   과제: __init__.py(gym 등록), env_cfg.py(환경), agents.py(PPO), carry_mdp.py(이벤트·관측·보상), carry_commands.py(명령 생성기),
 │                             pick_place_cfg.py(상자 집어 옮기기 장면), arm_ik.py(양팔 IK·몸통 좌표·정책 관측 거르기),
-│                             pick_place_machine.py(상자 집어 옮기기 상태 머신)
+│                             pick_place_machine.py(상자 집어 옮기기 상태 머신), vlm_scene_cfg.py·vlm_scene.py(VLM 장면: 받침대 3개·색 상자·머리 카메라)
 ├─ scripts/                   _launch.py(공통), train.py, play.py, inspect_g1.py(점검), eval_carry.py(정책 평가·걸음 지표), record_compare.py(근접 비교 영상),
-│                             ik_check.py(IK 닿는 범위·서서 팔 뻗기), pick_place_demo.py(상자 집어 옮기기 실행·평가·녹화), eval_stop.py(걷다가 멈추기 평가)
+│                             ik_check.py(IK 닿는 범위·서서 팔 뻗기), pick_place_demo.py(상자 집어 옮기기 실행·평가·녹화), eval_stop.py(걷다가 멈추기 평가),
+│                             make_vlm_data.py(VLM 데이터 생성), vlm_pick_place_demo.py(VLM 연결 데모), make_caption_video.py(자막 영상)
+├─ vlm/                       VLM 판단 층: schema.py(명령 체계), templates.py(문장 템플릿), common.py, train.py(LoRA), evaluate.py, infer_worker.py(실행용 작업자),
+│                             data/(jsonl 은 git 포함, images/ 는 제외), results/(문장별 평가 출력), outputs/(어댑터, git 제외)
 ├─ logs/                      학습 기록 (git 제외)
 ├─ outputs/                   Hydra 실행 기록 (git 제외)
 └─ portfolio/                 (git 제외)
@@ -32,8 +35,8 @@ humanoid_project/
   - Isaac Lab 위치는 환경 변수 ISAACLAB_PATH, 없으면 설치된 isaaclab 패키지 위치에서 계산
   - gym.register 는 Isaac Sim 앱이 켜지기 전에 실행되므로 설정 위치를 문자열로만 넘기고 isaaclab 모듈은 import 하지 않음 (앱 전 import 시 오류 여부는 확인 필요)
 - 원격 저장소: https://github.com/woyeonggwang/humanoid_project_construction (2026-11-19 구성, `main` 브랜치). 커밋 전 개인정보(로컬 경로·PC 사양·이메일) 검사
-- 브랜치 (2026-11-20): `main` = 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지 (2026-11-20 `gait_reward` 를 합침. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22. push·main 병합은 하지 않음)
-- .gitignore: `portfolio/`, `logs/`, `outputs/`, `__pycache__/`, `*.pt`
+- 브랜치 (2026-11-20): `main` = 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지 (2026-11-20 `gait_reward` 를 합침. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22), `vlm_planner` = `loco_v2` 에서 갈라져 VLM 판단 층 (7단계, 2026-11-22). `pick_place`·`loco_v2`·`vlm_planner` 는 push·main 병합을 하지 않음
+- .gitignore: `portfolio/`, `logs/`, `outputs/`, `__pycache__/`, `*.pt`, `vlm/data/images/`, `vlm/outputs/` (`outputs/` 규칙에 함께 걸림), `vlm/unsloth_compiled_cache/`
   - `outputs/`: train.py·play.py 실행 때 Hydra 가 실행 위치에 만드는 실행 기록. hydra.yaml 에 실행 폴더의 절대 경로가 들어가므로 올리지 않음
   - `logs/`: 체크포인트·영상이 커서 올리지 않음
 - `portfolio/`: 블로그·포트폴리오용 결과물(GIF·영상). **git 에 올리지 않음**
@@ -48,6 +51,7 @@ humanoid_project/
   - `portfolio/g1_pick_place_play.mp4`, `g1_pick_place_play.gif`: 5단계 상자 집어 옮기기 전체 순서 (한 대, 옆모습, 상자 3kg, 33.8초. mp4 3.2MB, GIF 720x405·10fps·2배속 8.4MB)
   - `portfolio/g1_loco_v2_play.mp4`, `g1_loco_v2_play.gif`: 6단계 걷기 정책 v2 본 학습(`2026-11-22_14-16-13_loco_v2`, model_3999) play 영상, 팔·손가락 무작위 움직임 켬 (mp4 1.5MB, GIF 800x450·15fps 6.1MB)
   - `portfolio/g1_pick_place_v2_play.mp4/.gif`(옆), `g1_pick_place_v2_front.mp4/.gif`(앞): v2 정책으로 스크립트 보정 없이 상자 집어 옮기기 (한 대, 상자 3kg, 41.9초. GIF 720x405·640x360, 10fps·2.5배속, 8.3·8.6MB)
+  - `portfolio/g1_vlm_pick_place.mp4`, `g1_vlm_pick_place.gif`: 7단계 VLM 연결 데모 (명령 3개, 명령·VLM 출력 자막과 머리 카메라 사진 포함. mp4 80초 3.7MB, GIF 720x405·8fps·3배속 3.9MB)
   - `portfolio/g1_carry_armrand_scratch_play.mp4`, `g1_carry_armrand_scratch_play.gif`: 팔 무작위판 처음부터 학습(`2026-11-20_20-54-06_armrand_scratch`, model_3999, 4단계 비교 기준) play 영상 (mp4 1.7MB, GIF 8.7MB)
 
 ## 확정된 설계 결정
@@ -1139,7 +1143,104 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
 - 해결 (v2 동작): 손을 벌린 채 뒤로 0.40m 물러난 뒤, IK 없이 관절 공간에서 짐 든 자세로 되돌림 (`PickPlaceMachine.arms_to_carry`, 1.5초) → 오른팔 팔꿈치 최대 3.0 → 1.0 rad. `--legacy` 는 5단계 동작(제자리에서 IK 로 거두기) 그대로
 - 남긴 것: `pick_place_demo.py` 가 관절 범위와 함께 그 값이 나온 상태 이름을 출력
 
+## 7단계: VLM 판단 층 (`vlm_planner` 브랜치, 2026-11-22~)
+- 목적: 로봇 머리 카메라 사진 + 한국어 명령 → 기술 순서 JSON. 파인튜닝한 소형 VLM 이 만들고, 6단계의 걷기 정책 v2 와 상자 집어 옮기기 상태 머신이 실행
+- 구조: 사진·명령 → VLM(별도 프로세스) → `{"plan": [...]}` → `scripts/vlm_pick_place_demo.py` 가 기술을 차례로 실행 (pick + place → `PickPlaceMachine.start`, go_to → `start_walk`, wait·stop → 제자리)
+- 파일
+  - `vlm/schema.py`: 받침대·상자·기술·거부 코드·시스템 프롬프트. 데이터 생성·학습·평가·실행이 모두 이 파일 기준 (다른 라이브러리를 쓰지 않아 Isaac 환경과 별도 파인튜닝 환경 양쪽에서 import)
+  - `vlm/templates.py`: 한국어 문장 템플릿(조사 자동 선택)과 정답 JSON, `vlm/common.py`: 모델 불러오기·프롬프트·생성·JSON 추출, `vlm/train.py`: LoRA 파인튜닝, `vlm/evaluate.py`: 평가, `vlm/infer_worker.py`: 실행용 작업자(모델을 올려 두고 표준 입력으로 사진 경로·명령을 받아 답함)
+  - `humanoid_tasks/g1_carry/vlm_scene_cfg.py`·`vlm_scene.py`: 장면 설정과 배치 도우미, `scripts/make_vlm_data.py`: 데이터 생성, `scripts/vlm_pick_place_demo.py`: 연결 데모, `scripts/make_caption_video.py`: 자막 영상
+- 환경: 데이터 생성과 데모는 Isaac 환경, 파인튜닝·평가·VLM 작업자는 **별도 파인튜닝 환경** (두 환경의 패키지를 섞지 않음). 데모는 Isaac 쪽 스크립트가 별도 파인튜닝 환경의 파이썬으로 작업자를 하위 프로세스로 띄움 (`--vlm_python` 또는 환경 변수 `VLM_PYTHON`)
+
+### 명령 체계 (`vlm/schema.py`, 2026-11-22 결정)
+- 받침대: `stand_L`·`stand_C`·`stand_R` (로봇이 볼 때 = 사진에서 왼쪽·가운데·오른쪽). 물건: `red_box`·`blue_box`·`green_box`·`yellow_box`
+- 기술: `pick(object, from)`, `place(to)`, `go_to(target)`, `wait(sec)`, `stop`. 출력은 `{"plan": [{"skill": ..., ...}]}`
+- 거부: `{"plan": [], "error": 코드}` — `object_not_found`(사진에 없는 상자), `target_occupied`(놓을 받침대에 이미 상자), `unsupported_command`(할 수 없는 일)
+- `pick` 의 `from` 은 명령에 없고 사진에서 찾아야 함 → 사진을 봐야 답할 수 있는 명령이 대부분이 되게 함 (train 기준 약 75%, test 297/400)
+
+### 장면과 머리 카메라 (`Humanoid-G1-VLM-Scene-v0`)
+- `G1VlmSceneEnvCfg`: 걷기 정책 v2 Play 설정을 상속. 받침대 3개(5단계와 같은 크기, 로봇 앞 1.45m, 좌우 0.65m 간격), 색 상자 4개(쓰지 않는 상자는 뒤쪽 30m 에 둠), 방향성 조명 하나, 머리 카메라
+- 머리 카메라: `TiledCamera`, 몸통(`torso_link`) 기준 앞 0.10m·위 0.43m, 아래로 26° 숙임, 448x448, 가로 시야각 약 70° (초점 거리 15, 가로 조리개 20.955). 사진 아래쪽에 손이 조금 보임
+  - 448x448 = 모델이 사진 한 장을 196 토큰으로 받는 크기 (프롬프트 전체 약 440 토큰)
+  - 환경 간격 30m, 카메라가 그리는 거리 15m: 여러 환경을 한꺼번에 찍을 때 옆 환경의 로봇·상자가 배경에 찍히던 것을 없앰
+
+### 데이터 (`scripts/make_vlm_data.py`, 2026-11-22)
+- 생성 명령 (Isaac 환경): `python -u scripts\make_vlm_data.py --headless --kit_args "--/app/vulkan=false --/renderer/active=d3d12"` → `vlm\data\train.jsonl`(3600)·`val.jsonl`(300)·`test.jsonl`(400) + `vlm\data\images\`(4300장, 603MB, git 제외). 시드 42, 환경 16개씩 찍음, 사진 찍는 데 약 2분 15초
+- 장면 무작위화: 상자 수 0~3개(비중 4:26:45:25)·색·받침대, 받침대 전체 앞뒤 ±10cm·좌우 간격 0.92~1.08배·개별 ±3cm·방향 ±8°, 상자 위치 ±2cm·방향 ±15°·크기 5가지(환경·색마다 다르게), 로봇(= 카메라) 위치 ±10cm·높이 0.72~0.78m·앞뒤 기울기 −6~+5°·방향 ±8°, 조명 세기·해의 높이와 방향(묶음마다)
+  - 로봇은 몸을 공중에 고정하고 짐 든 자세. 상자 크기는 실행 중에 바꿀 수 없어 환경마다 다른 크기로 만들어 둠 (`MultiAssetSpawnerCfg`). 데모는 기본 크기만 씀 (잡는 손 간격이 폭 30cm 기준)
+  - 로봇 위치·방향 범위는 데모에서 걸어서 처음 자리로 돌아왔을 때의 오차(방향 최대 5.7° 허용)를 덮게 잡음
+- 문장 템플릿 10종 (`vlm/templates.py`): 옮기기, 옮기고 기다리기, 집기, 상자 앞으로 가기, 빈 받침대로 옮기기, 내려놓기 (여기까지 사진 필요), 받침대로 가기, 기다리기, 멈추기, 할 수 없는 일
+  - 색·받침대·상자 낱말을 여러 표현 중에서 뽑고(`빨간`/`빨간색`/`붉은`, `받침대`/`대`, `상자`/`박스`), 조사는 받침에 따라 자동으로 붙임 (`을/를`, `(으)로`, `이/가`)
+  - 템플릿마다 **마지막 문장 패턴 하나는 test 전용**. test 400개 = 본 패턴 200 + 처음 보는 패턴 200. 처음 보는 패턴의 문장이 train 에 그대로 있는 경우 0개 (확인함)
+  - 정답 종류: train 은 계획 2008·`object_not_found` 753·`target_occupied` 473·`unsupported_command` 366, test 는 212·91·51·46
+  - '빈 받침대로' 는 빈 받침대가 정확히 하나일 때만 만듦
+
+### 모델과 학습 (`vlm/train.py`, 2026-11-22)
+- 모델: Qwen3.5-0.8B (모델 카드 표기 라이선스 Apache 2.0). 사고 모드는 끔 (`enable_thinking=False`, 학습·평가·실행 모두 같은 프롬프트)
+- LoRA: 언어·시각 쪽 모두, 어텐션과 MLP 층, r 16·alpha 16 (학습 파라미터 1318만 = 1.52%). Unsloth `FastVisionModel` 사용 (아래 시행착오의 메모리 측정으로 결정)
+- 프롬프트(시스템 프롬프트·사진·명령)는 손실에서 빼고 **답변 JSON 과 끝 토큰만 학습** (444 토큰 중 38 토큰, 직접 만든 collator 가 프롬프트 부분의 label 을 −100 으로)
+- 3 에포크(1350 스텝), 묶음 8, 학습률 2e-4(cosine, warmup 5%), 시드 42 → 14.5분, GPU 메모리 최대 2.4GB. val 손실 0.0082(1/3 에포크) → 0.00033(1 에포크) → 0.000012(3 에포크)
+- 실행: `cd vlm` 후 `python train.py` → `outputs/qwen35_08b/lora` (git 제외)
+
+### 평가 (`vlm/evaluate.py`, test 400개, 2026-11-22)
+- 파인튜닝 전후 모두 같은 test·같은 프롬프트. 정확도 = 출력 JSON 이 정답과 완전히 같음 (키 순서 무시). 문장별 출력은 `vlm/results/base_08b.jsonl`·`ft_08b.jsonl`
+  | 항목 | 파인튜닝 전 | 파인튜닝 후 |
+  |---|---|---|
+  | JSON 유효 | 82.5% | **100%** |
+  | 정확도: 전체 | 0% | **98.0%** |
+  | 정확도: 본 패턴 (200) | 0% | 100% |
+  | 정확도: 처음 보는 패턴 (200) | 0% | **96.0%** |
+  | 거부 정확도: 전체 (188) / 처음 보는 패턴 (99) | 0% | **95.7%** / 91.9% |
+  | 거부 종류별: 없는 상자 (91) / 놓을 곳에 상자 (51) / 할 수 없는 일 (46) | 0% | 100% / 100% / 82.6% |
+  | 사진을 봐야 하는 명령 (297) / 사진 없이 되는 명령 (103) | 0% | 100% / 92.2% |
+  | 상자 색별 (red 71 / blue 71 / green 84 / yellow 50) | 0% | 모두 100% |
+  | 상자가 놓인 받침대별 (L 61 / C 53 / R 71), 사진에 없는 상자 (91) | 0% | 모두 100% |
+  - 평가 속도: 문장당 0.16초 (16개씩 묶어 생성), GPU 메모리 최대 3.0GB
+  - 파인튜닝 전 모델은 형식을 따르지 않음 (예: `[{"skill": "wait(20)", "target": "robot_head"}]`)
+  - 틀린 8개는 모두 처음 보는 패턴의 '할 수 없는 일' 문장 "○○ 박스를 흔들어 봐" (25개 중 17개 정답): 6개는 그 색 상자가 사진에 없어 `object_not_found` 로, 2개는 `pick` 계획으로 답함. 학습 때 본 적 없는 동사를 '할 수 없는 일'로 가려내는 것이 가장 약함
+- 판정: 처음 보는 패턴 96.0% (기준 90%), 거부 정확도 95.7% (기준 90%) → **통과**. 0.8B 로 기준을 넘어 2B 는 비교하지 않음
+
+### 연결 데모 (`scripts/vlm_pick_place_demo.py`, 2026-11-22)
+- 실행 (Isaac 환경, `VLM_PYTHON` = 별도 파인튜닝 환경의 파이썬):
+  ```
+  python -u scriptslm_pick_place_demo.py --headless --video --kit_args "--/app/vulkan=false --/renderer/active=d3d12"
+  ```
+  - 처음 배치: 왼쪽에 빨간 상자, 가운데에 파란 상자, 오른쪽은 빔 (`--layout`). 명령 3개 (`--commands`), 걷기 정책 v2 `model_3999`, 어댑터 `vlm/outputs/qwen35_08b/lora`
+  - 명령마다: 처음 자리에서 머리 카메라 사진 저장 → 작업자에 사진 경로·명령 전달 → 계획 실행 → 처음 자리로 걸어서 돌아옴(뒤로·옆으로). `--plans` 로 VLM 없이 실행기만 시험할 수 있음
+- 결과: **3개 중 3개 성공**, 넘어짐 없음, 80.0초 (같은 설정으로 두 번 실행해 두 번 모두 3/3)
+  | 명령 | VLM 출력 | 생성 시간 | 결과 |
+  |---|---|---|---|
+  | 빨간 상자를 오른쪽 받침대로 옮겨 | `pick(red_box, stand_L)` → `place(stand_R)` | 2.16초 | 빨간 상자가 오른쪽 받침대에 놓임 |
+  | 노란 상자를 가운데 받침대로 옮겨 | `error: object_not_found` | 0.69초 | 움직이지 않음 (노란 상자는 장면에 없음) |
+  | 파란 상자를 빈 받침대로 옮겨 | `pick(blue_box, stand_C)` → `place(stand_L)` | 1.72초 | 파란 상자가 왼쪽 받침대에 놓임 (첫 명령 뒤 비어 있던 곳) |
+  - 성공 판정: 계획을 끝까지 실행 + 상자가 놓을 받침대 가운데에서 5cm 이내 (거부는 코드가 맞고 계획이 비어 있음)
+  - 사진을 찍은 자리: 처음 0.5°, 한 번 다녀온 뒤 앞 −2.2cm·옆 −0.7cm·방향 −4.3° (데이터의 로봇 방향 범위 ±8° 안)
+  - 생성 시간은 한 문장씩 생성한 값 (첫 번째는 처음 실행이라 더 걸림). 평가 때의 0.16초는 16개씩 묶은 값
+- 같은 GPU 에 VLM 과 Isaac 을 함께 올렸을 때의 메모리 (GPU 전체 사용량, 영상 녹화 포함): 장면·걷기 정책만 5.4GB → VLM 을 올린 뒤 7.3GB → 실행 중 7.9GB. VLM 프로세스가 잡은 메모리 1.7GB, 모델 불러오기 9~12초
+- 영상: `2026-11-22_14-16-13_loco_v2ideoslm_demolm_demo-step-0.mp4` (고정 카메라, 로봇 뒤 오른쪽 위), 사진 `vlm_demo_cmd1~3.png`, 시간표 `vlm_demo_timeline.json`
+  - 자막 영상: `python scripts\make_caption_video.py --dir <위 폴더> --name vlm_demo --out portfolio\g1_vlm_pick_place.mp4 --gif portfolio\g1_vlm_pick_place.gif` → 아래쪽에 명령·VLM 출력 JSON·결과, 오른쪽 위에 그때의 머리 카메라 사진
+  - portfolio: `g1_vlm_pick_place.mp4` (1280x720, 80초, 3.7MB), `g1_vlm_pick_place.gif` (720x405, 8fps, 3배속, 3.9MB)
+- 판정: 3/3 → **통과**
+
+### 2026-11-22 데모: 걸어서 돌아온 자리의 방향 오차로 사진이 한쪽으로 치우침
+- 증상: 학습 중간 체크포인트로 실행기를 점검할 때, 첫 명령을 실행하고 처음 자리로 돌아와 찍은 사진에서 오른쪽 받침대가 화면 가장자리에 걸림
+- 원인: 처음 자리에 멈출 때의 방향 오차(허용 0.1 rad). 받침대가 시야각 70° 의 좌우 24° 지점에 있어 방향이 5° 넘게 틀어지면 상자가 잘림. 처음 데이터는 로봇 방향을 ±5° 로만 흔듦
+- 해결: 데이터의 로봇 위치를 ±10cm, 방향을 ±8° 로 넓힘. 데모가 사진을 찍는 자리의 오차를 출력. 최종 정책으로는 방향 −4.3° 였고 VLM 답은 모두 맞음
+
+### 2026-11-22 같은 GPU 에서 걷기 학습 중 VLM 학습 시험을 돌리자 GPU 메모리가 넘침
+- 증상: 걷기 정책 학습이 도는 동안 VLM 학습 시험(일반 transformers + peft, 묶음 4)을 돌리자 GPU 메모리 사용량이 장치 용량을 넘어 시스템 전체가 느려짐
+- 원인: 사진 토큰이 들어간 긴 입력(약 440 토큰)의 역전파 메모리. 측정(묶음 1): 일반 방식 + gradient checkpointing 3.3GB, Unsloth 2.0GB
+- 해결: `train.py` 를 Unsloth `FastVisionModel` 로 바꿈 (묶음 8 에서 최대 2.4GB). `--mem_cap_gb`(기본 10)로 프로세스가 쓸 수 있는 GPU 메모리에 상한을 걸어, 넘으면 느려지는 대신 오류로 멈추게 함. GPU 를 많이 쓰는 작업은 걷기 학습이 끝난 뒤에 함
+
 ## 미해결 과제
+- 7단계 (VLM 판단 층)
+  - 처음 보는 동사를 '할 수 없는 일'로 가려내는 것이 약함 ("흔들어 봐" 25개 중 17개). 없는 상자를 가리키면서 할 수 없는 일을 시킬 때 어느 거부 코드가 맞는지도 정답 규칙상 `unsupported_command` 하나로만 정해 둠
+  - 평가·데모 모두 학습 데이터와 같은 장면(받침대 3개, 단색 상자 4색, 같은 시뮬레이터 렌더링). 실제 사진, 다른 물건·배경, 같은 색 상자 여러 개는 다루지 않음
+  - 처음 보는 '문장 패턴'은 템플릿의 마지막 패턴 하나씩뿐 (사람이 자유롭게 쓴 문장으로는 평가하지 않음)
+  - 데모는 `pick` 뒤에 `place` 가 오는 계획만 실행 (집기만 하고 들고 있기, 들고 있는 상자 내려놓기만 하기는 실행기가 지원하지 않음. VLM 은 이런 계획도 만듦)
+  - 사진은 처음 자리에서만 찍음 (다른 자리에서 본 장면으로는 학습하지 않음). 실행 도중에는 사진을 다시 보지 않음
+  - 2B 모델과의 비교, 양자화·더 빠른 생성은 하지 않음 (한 문장 0.7~2.2초)
+  - VLM 작업자와 Isaac 을 한 GPU 에서 돌릴 때 메모리 약 7.9GB (영상 녹화 포함)
 - 6단계 (걷기 정책 v2 `2026-11-22_14-16-13_loco_v2\model_3999`)
   - 손이 무거울 때(손 하나 +4~5kg) 서 있는 동안 발을 댄 채 조금씩 앞으로 밀려감 (20초에 평균 43cm, 기준 정책 2.7cm). +3kg 까지는 거의 없음. 원인 확인 필요
   - 서 있을 때 뒤로 4.4° 기욺 (기준과 같음, 가벼운 손 5.6°). 걸을 때만 고침
