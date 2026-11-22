@@ -86,6 +86,19 @@ gym.register(
     },
 )
 
+# 5단계: 상자 집어 옮기기 (걷기 정책은 팔 무작위판 그대로, 팔은 스크립트의 IK 가 움직임)
+_PICK_CFG = "humanoid_tasks.g1_carry.pick_place_cfg"
+
+gym.register(
+    id="Humanoid-G1-ArmIK-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_PICK_CFG}:G1ArmIKEnvCfg",
+        "rsl_rl_cfg_entry_point": _ARMRAND_AGENT_CFG,
+    },
+)
+
 gym.register(
     id="Humanoid-G1-Carry-Gait-ArmRand-Flat-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
