@@ -100,6 +100,16 @@ gym.register(
 )
 
 gym.register(
+    id="Humanoid-G1-PickPlace-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{_PICK_CFG}:G1PickPlaceEnvCfg",
+        "rsl_rl_cfg_entry_point": _ARMRAND_AGENT_CFG,
+    },
+)
+
+gym.register(
     id="Humanoid-G1-Carry-Gait-ArmRand-Flat-Play-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
