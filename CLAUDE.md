@@ -25,6 +25,7 @@ humanoid_project/
 │                             make_vlm_data.py(VLM 데이터 생성), vlm_pick_place_demo.py(VLM 연결 데모), make_caption_video.py(자막 영상)
 ├─ vlm/                       VLM 판단 층: schema.py(명령 체계), templates.py(문장 템플릿), common.py, train.py(LoRA), evaluate.py, infer_worker.py(실행용 작업자),
 │                             data/(jsonl 은 git 포함, images/ 는 제외), results/(문장별 평가 출력), outputs/(어댑터, git 제외)
+├─ vla/                       VLA 조사: train_probe.py(SmolVLA 학습 메모리·시간 측정), infer_probe.py(행동 출력 메모리·지연 측정). 별도 VLA 환경에서 실행
 ├─ logs/                      학습 기록 (git 제외)
 ├─ outputs/                   Hydra 실행 기록 (git 제외)
 └─ portfolio/                 (git 제외)
@@ -35,7 +36,7 @@ humanoid_project/
   - Isaac Lab 위치는 환경 변수 ISAACLAB_PATH, 없으면 설치된 isaaclab 패키지 위치에서 계산
   - gym.register 는 Isaac Sim 앱이 켜지기 전에 실행되므로 설정 위치를 문자열로만 넘기고 isaaclab 모듈은 import 하지 않음 (앱 전 import 시 오류 여부는 확인 필요)
 - 원격 저장소: https://github.com/woyeonggwang/humanoid_project_construction (2026-11-19 구성, `main` 브랜치). 커밋 전 개인정보(로컬 경로·PC 사양·이메일) 검사
-- 브랜치 (2026-11-20): `main` = 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지 (2026-11-20 `gait_reward` 를 합침. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22), `vlm_planner` = `loco_v2` 에서 갈라져 VLM 판단 층 (7단계, 2026-11-22). `pick_place`·`loco_v2`·`vlm_planner` 는 push·main 병합을 하지 않음
+- 브랜치 (2026-11-20): `main` = 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지 (2026-11-20 `gait_reward` 를 합침. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22), `vlm_planner` = `loco_v2` 에서 갈라져 VLM 판단 층 (7단계, 2026-11-22). `vla_probe` = `vlm_planner` 에서 갈라져 VLA 조사 (8단계 준비, 2026-11-23, push 하지 않음). `pick_place`·`loco_v2`·`vlm_planner` 는 2026-11-23 원격에 올림 (main 병합은 하지 않음)
 - .gitignore: `portfolio/`, `logs/`, `outputs/`, `__pycache__/`, `*.pt`, `vlm/data/images/`, `vlm/outputs/` (`outputs/` 규칙에 함께 걸림), `vlm/unsloth_compiled_cache/`
   - `outputs/`: train.py·play.py 실행 때 Hydra 가 실행 위치에 만드는 실행 기록. hydra.yaml 에 실행 폴더의 절대 경로가 들어가므로 올리지 않음
   - `logs/`: 체크포인트·영상이 커서 올리지 않음
@@ -1254,7 +1255,136 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
 - 원인: 사진 토큰이 들어간 긴 입력(약 440 토큰)의 역전파 메모리. 측정(묶음 1): 일반 방식 + gradient checkpointing 3.3GB, Unsloth 2.0GB
 - 해결: `train.py` 를 Unsloth `FastVisionModel` 로 바꿈 (묶음 8 에서 최대 2.4GB). `--mem_cap_gb`(기본 10)로 프로세스가 쓸 수 있는 GPU 메모리에 상한을 걸어, 넘으면 느려지는 대신 오류로 멈추게 함. GPU 를 많이 쓰는 작업은 걷기 학습이 끝난 뒤에 함
 
+## 8단계 준비: VLA 조사 (`vla_probe` 브랜치, 2026-11-23)
+- 목적: 팔 동작을 스크립트(IK)가 아니라 사진·문장을 보고 행동을 내는 모델(VLA)로 바꿀 수 있는지 조사하고, 가장 유력한 후보(SmolVLA)가 GPU 메모리 12GB 안에서 실제로 도는지 확인. 이 단계에서는 로봇에 붙이지 않음
+- 방법: 다른 곳에서 조사한 결론 10가지를 공식 문서·저장소 원문으로 다시 대조 → SmolVLA 를 별도 환경에 설치해 학습·추론 메모리와 시간을 측정 → 붙일 때의 설계를 문서·소스로 확인 (코드는 측정 스크립트만)
+- 파일: `vla/train_probe.py`(학습 메모리·시간 측정, `lerobot-train` 을 메모리 상한을 걸고 부름), `vla/infer_probe.py`(체크포인트로 행동 출력 1회, 메모리·지연 측정)
+
+### 교차검증 (공식 문서·저장소 원문, 2026-11-23 확인)
+- 원문은 저장소의 파일을 직접 내려받아 대조함. 6번의 일부와 10번은 조사 에이전트가 읽은 값이며, 그중 직접 다시 대조하지 않은 것은 표에 표시
+  | # | 주장 | 판정 | 근거 |
+  |---|---|---|---|
+  | 1 | SmolVLA 미세조정 메모리는 배치 8 기준 약 10~16GB, 배치 축소·시각 인코더 고정으로 줄일 수 있다 | **문구는 맞음, 기본 설정의 실제 값은 훨씬 작음** | LeRobot 하드웨어 안내: "Small VLA \| `smolvla` \| ~10–16GB" (Peak VRAM, BS 8, AdamW), "indicative … not exact predictions", "Drop the batch size (~linear) … for SmolVLA leave `freeze_vision_encoder=True`". 어떤 고정 설정의 값인지는 적혀 있지 않음. 우리 실측: 기본 설정(행동 부분만 학습) 배치 8 = 3.0GB, 전부 학습 배치 8 = 9.0GB (아래 측정) — https://github.com/huggingface/lerobot/blob/main/docs/source/hardware_guide.mdx |
+  | 2 | GR00T N1.6/N1.7 은 추론 16GB 이상, 미세조정 40GB 이상(최소 24GB), Linux 또는 WSL2 | **일부 틀림** | N1.7: "Inference: 1 GPU with 16 GB+ VRAM" (맞음). 미세조정 "**Minimum:** 1 GPU with 40 GB+ VRAM", 기본 미세조정은 "peak VRAM under ~35 GB" → **최소 24GB 라는 문구는 없음**. OS "Ubuntu 22.04+ (dGPU)", WSL2 언급 없음. N1.6 README 에는 메모리 수치 없이 "1 H100 node or L40 node" 권장만 있음 — https://github.com/NVIDIA/Isaac-GR00T/blob/main/getting_started/hardware_recommendation.md |
+  | 3 | openpi(π0/π0.5) LoRA 미세조정은 22.5GB 초과, Ubuntu 22.04 만 지원 | 맞음 | "Fine-Tuning (LoRA) \| > 22.5 GB", "tested with Ubuntu 22.04, we do not currently support other operating systems" — https://github.com/Physical-Intelligence/openpi |
+  | 4 | 최신 LeRobot 은 Python 3.12 이상, PyTorch 2.10 이상, Windows 는 부분 지원 | **일부 틀림** | `requires-python = ">=3.12"` (맞음). torch 는 `"torch>=2.7,<2.16.0"` → **2.10 이상이 아님** (2.10 은 conda 대신 uv·시스템 ffmpeg 를 쓸 때의 조건). Windows 를 '부분 지원'이라고 한 공식 문구는 없음: 설치 문서에 PowerShell 안내가 있고, 일부 옵션(libero 등)만 Linux 전용. 실제로 Windows 에서 학습·추론이 됨 (아래) — https://github.com/huggingface/lerobot/blob/main/pyproject.toml |
+  | 5 | TorchCodec 은 PyTorch 2.8 미만 Windows 에서 쓸 수 없다 | 맞음 | LeRobot pyproject 주석 "win32 x86_64: wheels since 0.7.0 (needs torch>=2.8)", TorchCodec 호환 표 0.7 ↔ torch 2.8. 쓸 수 없으면 LeRobot 이 자동으로 `pyav` 디코더로 바꿈 — https://github.com/meta-pytorch/torchcodec |
+  | 6 | 12GB 에서 미세조정 가능한 다른 VLA 가 있는가 | 공식으로 밝힌 것은 **VLA-Adapter 하나** | 아래 "다른 후보" 표 |
+  | 7 | OpenVLA(7B) LoRA 미세조정은 약 27GB 이상 | 맞음 | "fine-tune with a smaller GPU, as long as it has at least ~27 GB of memory, by modifying the batch size" — https://github.com/openvla/openvla |
+  | 8 | 12GB GPU 에서 SmolVLA 배치 16 을 약 4.5GB 로 학습한 공개 프로젝트가 있다 | **있음** (한 사람의 기록) | `Jbruslind/soarm101-isaac` 의 `docs/LEROBOT_TRAINING.md`: 배치 16 최대 4.51GB(PyTorch 가 잡은 값, nvidia-smi 는 5.0GB). 설정은 아래 — https://github.com/Jbruslind/soarm101-isaac/blob/main/docs/LEROBOT_TRAINING.md |
+  | 9 | LeRobot 에 Isaac Lab Arena 연동 평가 기능이 있고 참고할 수 있다 | **있지만 지금은 못 씀** | 문서 맨 위에 "**Deprecated.** This page was written for LeRobot 0.4 and Isaac Sim 5.1, which requires Python 3.11, while LeRobot requires Python 3.12 or newer since 0.5". Linux(Ubuntu 22.04/24.04) 전용. 현재 방식(EnvHub)도 "Isaac Sim 5 and Isaac Lab 2, on Python 3.11 runs neither way; use … Isaac Sim 6 and Isaac Lab 3" — https://github.com/huggingface/lerobot/blob/main/docs/source/envhub_isaaclab_arena.mdx , https://github.com/huggingface/lerobot/blob/main/docs/source/envhub.mdx |
+  | 10 | Windows 에서 막히면 WSL2 를 대안으로 쓸 수 있다 | 쓸 수 있음 (설치하지 않음) | 아래 "WSL2" |
+- 8번 프로젝트의 설정 (원문 대조): 다른 GPU(12GB), Ubuntu 22.04 + Docker, LeRobot 0.6.1, torch 2.11, `freeze_vision_encoder=True`·`train_expert_only=True`(기본값), bf16 가중치 그대로(AMP 없음), 카메라 2대 640x480, 데이터 `lerobot/svla_so101_pickplace`, 150스텝 측정. 배치 4 / 8 / 16 / 32 = 2.06 / 2.88 / 4.51 / 7.78GB, 배치 64 는 메모리 부족
+- 9번에서 참고가 되는 것: NVIDIA 가 공개한 `nvidia/smolvla-arena-gr1-microwave`(휴머노이드 GR1, Isaac Lab Arena)의 설정 — 입력은 상태 54차원 + 머리 카메라 512x512 한 대, 출력은 행동 36차원, `max_state_dim` 54·`max_action_dim` 36, `chunk_size` 50, 고정 설정은 기본값. G1 용 데이터셋 `nvidia/Arena-G1-Loco-Manipulation-Task` 도 공개되어 있음 (내용은 확인하지 않음 — 확인 필요)
+
+### 다른 후보 (6번, 조사 에이전트가 공식 저장소·논문·모델 카드를 읽은 결과)
+| 모델 (크기) | 미세조정 메모리에 대한 공식 문구 | 12GB | OS·틀 | 라이선스 (코드 / 가중치) |
+|---|---|---|---|---|
+| VLA-Adapter (LLM 0.5B) | "`--batch_size 1` and `--lora_rank 64`, it only requires `9.6GB`", "A card with 10GB-12GB" (직접 대조함). 배치 4 는 약 20GB | **공식으로 가능하다고 밝힘** (배치 1, 느리고 불안정하다고 스스로 적음) | 설치 예가 Linux 용, PyTorch 2.2, LeRobot 밖(RLDS 데이터) | MIT / MIT |
+| Evo-1 (0.77B) | 수치 없음. LeRobot 예제는 배치 4, bf16, 1단계에서 VLM 고정 (직접 대조함) | 될 것으로 보이나 공식 수치 없음 (확인 필요) | LeRobot 에 포함 (`policy.type=evo1`) | MIT / 모델 카드에 표기 없음 |
+| X-VLA (0.9B) | LeRobot 하드웨어 안내는 "Large VLA … ~24–40GB" 묶음 | 공식 안내로는 안 됨 | LeRobot 에 포함 | Apache 2.0 / Apache 2.0 |
+| Octo (27M / 93M, VLM 없음) | "single NVIDIA A5000 GPU with 24GB" 에서 약 5시간 | 공식 수치 없음 | JAX, LeRobot 밖 | MIT / MIT |
+| RDT-170M | 수치 없음 ("requires less VRAM") | 공식 수치 없음 | PyTorch 2.1, 양팔 로봇 위주 | MIT |
+| OpenVLA-OFT (7B) | "27-80 GB" | 안 됨 | — | MIT |
+| pi0-FAST, WALL-OSS, EO-1 (LeRobot 안) | 하드웨어 안내 "~24–40GB" | 안 됨 | LeRobot 에 포함 | Apache 2.0 등 |
+- VLA-Adapter 와 Evo-1 줄의 인용, LeRobot 하드웨어 안내의 묶음 표는 원문을 직접 대조함. 나머지 줄은 조사 에이전트가 읽은 값이고 직접 다시 대조하지 않음
+- 학습을 Windows 에서 지원한다고 밝힌 후보는 없음. SmolVLA 는 LeRobot 안에 있고 아래 측정에서 Windows 로 됨 → **SmolVLA 를 후보로 유지**
+
+### WSL2 (10번, 정리만 — 설치하지 않음. 조사 에이전트가 읽은 값, 직접 대조하지 않음)
+- WSL2 는 CUDA 계산을 지원 (Microsoft·NVIDIA 문서). Windows 쪽 그래픽 드라이버만 설치하고 WSL 안에는 Linux 드라이버를 깔지 않음. PyTorch 는 2.7 의 cu128 빌드부터 최신 세대 GPU 를 지원하고, PyTorch 개발자가 포럼에서 그 세대 GPU 에 WSL2 를 쓰라고 안내한 적이 있음
+- 주의할 점: 기본 RAM 상한이 Windows 메모리의 50% (`.wslconfig` 로 조정), 데이터는 `/mnt/` 아래가 아니라 WSL 파일 시스템에 둘 것, 고정(pinned) 메모리가 제한됨, GPU 영상 디코딩은 확인되지 않음, Windows 에서처럼 GPU 메모리가 넘칠 때 시스템 메모리로 넘어가는지는 확인되지 않음
+- **Isaac Sim / Isaac Lab 은 WSL2 를 지원하지 않음** (NVIDIA 직원 포럼 답변, 요구사항 문서에 Ubuntu·Windows 11 만 있음) → WSL2 를 쓰더라도 VLA 학습용으로만
+- 지금은 필요 없음: Windows 에서 학습·추론이 됨 (아래)
+
+### 가능성 확인: SmolVLA 설치와 측정 (2026-11-23)
+- 환경: Isaac 환경·기존 파인튜닝 환경과 **따로 만든 세 번째 환경** (이하 'VLA 환경'). 두 환경은 건드리지 않음
+- 설치 순서 (성공한 순서, cmd 기준. `<ENV>` 는 새 conda 환경 경로)
+  ```
+  conda create -y -p <ENV> python=3.12
+  conda activate <ENV>
+  python -m pip install --upgrade pip
+  pip install "torch<2.16" "torchvision<0.30" --index-url https://download.pytorch.org/whl/cu130
+  python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_arch_list())"
+  conda install -y ffmpeg -c conda-forge
+  pip install "lerobot[smolvla,training]==0.7.0"
+  python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+  ```
+  - torch 를 먼저 CUDA 빌드로 깔고 LeRobot 을 뒤에 깖. LeRobot 설치 뒤에도 torch 가 `2.14.1+cu130`·GPU 인식 True 그대로인 것을 확인 (CPU 판으로 바뀌지 않음. numpy 만 2.5.4 → 2.2.6 으로 내려감)
+  - 버전: Python 3.12.16, torch 2.14.1+cu130, torchvision 0.29.1+cu130, lerobot 0.7.0, transformers 5.22.2, accelerate 1.16.0, datasets 5.2.0, torchcodec 0.17.0, av 15.1.0, numpy 2.2.6, ffmpeg 7 (conda-forge)
+- 측정 방법: `python vla/train_probe.py --batch <B> --steps 60 [--unfreeze_vision] [--train_vlm] --out <폴더>`
+  - 모델 `lerobot/smolvla_base`(4.5억 파라미터), 데이터 `lerobot/svla_so101_pickplace`(SmolVLA 문서의 예제와 같은 계열. 50 에피소드·11,939 프레임·30fps, 카메라 2대 640x480, 상태·행동 6차원). 8번 프로젝트와 같은 데이터·같은 기본 설정으로 맞춤
+  - 프로세스에 GPU 메모리 상한 10.5GB 를 걸어(`torch.cuda.set_per_process_memory_fraction`), 넘으면 시스템 메모리로 넘쳐 느려지는 대신 오류로 멈추게 함
+  - 최대 메모리 = PyTorch 가 잡은 값(`max_memory_allocated`). nvidia-smi 값은 GPU 전체 사용량(다른 프로그램 약 0.9GB 포함). 스텝당 시간 = LeRobot 로그의 `updt_s` (40·60스텝째, 데이터 읽기 시간은 0.001~0.002초로 병목이 아님)
+- 결과 (각 60스텝)
+  | 학습하는 부분 (학습 파라미터) | 배치 | 최대 메모리 | nvidia-smi 최대 | 스텝당 시간 | 참고: 8번 프로젝트 |
+  |---|---|---|---|---|---|
+  | 행동 부분만 = 기본 설정 (1억) | 4 | 2.16GB | 3.3GB | 0.15초 | 2.06GB |
+  | 〃 | 8 | 3.00GB | 4.1GB | 0.18초 | 2.88GB |
+  | 〃 | **16** | **4.65GB** | 5.8GB | 0.28초 | 4.51GB |
+  | 〃 | 32 | 7.91GB | 9.2GB | 0.56초 | 7.78GB |
+  | 〃 | 48 | 메모리 부족 (상한 10.5GB) | — | — | (64 에서 부족) |
+  | 행동 부분 + VLM, 시각 인코더는 고정 (3.1억) | 4 | 3.34GB | 4.6GB | 0.15초 | — |
+  | 〃 | 8 | 4.12GB | 5.4GB | 0.19초 | — |
+  | 〃 | 16 | 6.09GB | 7.3GB | 0.32초 | — |
+  | 전부 (3.9억) | 4 | 5.76GB | 7.1GB | 0.25초 | — |
+  | 〃 | 8 | 9.03GB | 10.4GB | 0.37초 | — |
+  | 〃 | 16 | 메모리 부족 | — | — | — |
+  - 8번 프로젝트의 값과 0.1~0.15GB 차이로 맞음 (GPU·OS·LeRobot 버전이 다른데도 같음)
+  - `train_expert_only=true`(기본)이면 `freeze_vision_encoder` 를 꺼도 달라지지 않음: 학습 파라미터 1억·메모리 그대로 (배치 4·8·16 에서 확인). 시각 인코더 고정은 VLM 까지 학습할 때만 차이를 만듦 (배치 8: 4.1GB ↔ 9.0GB)
+  - 공식 안내의 '배치 8 에 10~16GB' 는 전부 학습에 가까운 값으로 보임 (실측 9.0GB). 공식 문서의 예제 명령은 배치 64 인데 12GB 에서는 안 됨
+  - **12GB 안에서 도는 설정: 기본 설정(행동 부분만) 배치 16~32, VLM 까지 학습하면 배치 16(시각 인코더 고정), 전부 학습하면 배치 8 이 한계**
+- 300스텝 학습 (기본 설정, 배치 16, `--save`): 112초(준비 포함), 최대 4.65GB, 손실 0.49(50스텝) → 0.30(150) → 0.21(300), 스텝당 0.29초·초당 55표본. 체크포인트 저장됨 (가중치 0.9GB + 최적화 상태 0.4GB)
+  - 이 속도면 2만 스텝(공식 문서의 예)이 약 1.6시간 (0.29초 × 20000 으로 계산한 값, 실제로 돌리지 않음)
+- 추론 (`python vla/infer_probe.py --ckpt <체크포인트>/pretrained_model`): 데이터셋의 한 프레임(카메라 2장 + 상태 6 + 작업 문장)을 넣어 행동 50스텝(1, 50, 6)을 출력
+  | 항목 | 값 |
+  |---|---|
+  | 모델 불러오기 | 4.6초, 0.86GB |
+  | 행동 출력 한 번 (10번의 중앙값, 범위) | 0.22초 (0.21~0.26초). 첫 번째는 0.58초 |
+  | 최대 메모리 | 0.93GB |
+  - 300스텝만 학습한 모델이라 정확하지는 않음 (기록된 행동과의 차이 평균 15, 단위는 데이터의 관절 각도). 동작 확인용
+  - 8번 프로젝트의 추론 기록(0.27초, 0.89GB)과 비슷
+
+### 2026-11-23 Windows: `--policy.path=lerobot/smolvla_base` 가 경로로 바뀌어 내려받기 실패
+- 증상: `lerobot-train` 이 `HFValidationError: Repo id must use alphanumeric chars … 'lerobot\smolvla_base'` 로 멈춤
+- 원인: LeRobot 0.7.0 이 `policy.path` 를 경로로 다루면서 Windows 에서 `/` 가 `\` 로 바뀌고, 그 문자열을 Hugging Face 저장소 이름으로 넘김
+- 해결: 모델을 먼저 내려받아(`huggingface_hub.snapshot_download`) 로컬 폴더 경로를 넘김 (`vla/train_probe.py`)
+
+### 2026-11-23 Windows: TorchCodec 이 ffmpeg 를 불러오지 못함 → pyav 로 자동 대체
+- 증상: 경고 "TorchCodec could not load the FFmpeg libraries … Falling back to 'pyav' as a default decoder". 직접 불러 보면 `libtorchcodec_core7.dll` 에서 `OSError: [WinError 127] 지정된 프로시저를 찾을 수 없습니다`
+- 확인한 것: conda-forge ffmpeg 7 의 DLL(avcodec-61 등)은 환경 안에 있고 TorchCodec 이 그 폴더를 DLL 경로에 넣음. torchcodec 0.17.0 과 0.16.0 모두 같은 오류 (0.17.0 으로 되돌림)
+- 원인: 확인 필요 (torch 2.14.1+cu130 과 PyPI 의 torchcodec CPU 빌드, 또는 conda-forge ffmpeg 빌드와의 조합 문제로 보임)
+- 지금 대응: LeRobot 이 자동으로 `pyav` 디코더를 씀. 학습 로그의 데이터 읽기 시간이 스텝당 0.001~0.002초라 병목이 아니어서 그대로 둠 (작업자 4개, 카메라 2대 기준)
+
+### 설계 확인 (문서·소스로 확인, 코드는 만들지 않음)
+- SmolVLA 의 입력·출력 (LeRobot 0.7.0 `configuration_smolvla.py`·`modeling_smolvla.py`)
+  | 항목 | 내용 |
+  |---|---|
+  | 카메라 | 설정에 적은 만큼 (`smolvla_base` 는 `camera1~3` 을 기대). 데이터의 카메라 이름은 `--rename_map` 으로 맞춤. 일부가 없어도 됨 (카메라 2대로 학습·추론함). 사진은 비율을 유지한 채 512x512 로 줄이고 남는 곳을 채움 |
+  | 상태 | `observation.state` 벡터 하나. `max_state_dim`(기본 32)까지 0 으로 채움 |
+  | 행동 | `max_action_dim`(기본 32)까지 채워 학습하고 출력에서 실제 차원만 잘라 냄 |
+  | 한 번에 내는 행동 | `chunk_size` 50 스텝, 그중 `n_action_steps`(기본 50)를 실행. 관측은 지금 한 시점만 (`n_obs_steps` 1) |
+  | 문장 | 작업 설명 문장, 토큰 48개까지 |
+  | 학습하는 부분 | 기본은 행동 부분만 (`train_expert_only=True`) |
+- G1 상체를 넣을 수 있는가: **넣을 수 있음**. 팔 10관절 + 손가락 14 = 24차원, 허리를 더해도 25차원으로 기본 상한 32 안. NVIDIA 의 GR1 모델은 상한을 54·36 으로 올려 씀 (위 9번) → 상한은 바꿀 수 있지만, 바꿨을 때 `smolvla_base` 의 상태·행동 입력층 가중치를 그대로 이어받는지는 확인하지 않음 (확인 필요). 32 안에 두면 이 문제가 없음
+  - 지금 구조(걷기 = 강화학습 정책, 잡기 = 붙이기)에서 VLA 가 낼 행동의 한 예: 팔 관절 목표 10 + 걷기 속도 명령 3 + 붙이기 신호 1 = 14차원 (제안, 확정 아님)
+  - Isaac 환경의 제어 주기는 0.02초(50Hz). 행동 50스텝 = 1초 분량이고 한 번 출력에 0.22초가 걸리므로, 받은 행동을 따라가는 동안 다음 것을 계산하는 방식이면 됨
+- LeRobot 데이터셋 형식 (v3.0, `lerobot-dataset-v3.mdx` 와 내려받은 데이터의 `meta/info.json` 으로 확인): `meta/info.json`(항목별 모양·fps·파일 경로 규칙), `meta/stats.json`(정규화 통계), `meta/tasks.parquet`(작업 문장), `meta/episodes/`(에피소드별 길이·위치), `data/…parquet`(프레임별 상태·행동·시간), `videos/<카메라>/…mp4`(카메라별 영상, 여러 에피소드를 한 파일에)
+  - 만드는 방법: `LeRobotDataset.create(repo_id, fps, features, root=…, robot_type=…, use_videos=True)` → 프레임마다 `add_frame({…, "task": 문장})` → 에피소드 끝에 `save_episode()` → 마지막에 반드시 `finalize()` (빠뜨리면 parquet 파일이 깨짐, 공식 문서)
+  - **Isaac 환경에는 LeRobot 을 설치할 수 없음**: LeRobot 0.5 부터 Python 3.12 이상이 필요하고 Isaac 환경은 3.11 → Isaac 쪽은 에피소드를 원자료(카메라 사진 묶음, 상태·행동 배열, 작업 문장)로 저장하고, VLA 환경에서 위 함수로 변환하는 두 단계로 나눠야 함 (변환은 실행해 보지 않음)
+- 두 환경의 연결
+  - LeRobot 에 있는 기능: **원격 추론** (`lerobot-policy-server` 가 GPU 에서 모델을 돌리고, 로봇 쪽은 행동 버퍼를 따라가며 다음 묶음을 받음. Zenoh 통신, Python 에서는 `lerobot.remote_inference.RemoteClient`). SmolVLA 는 이 경로로 실제 로봇에서 돌린 정책으로 적혀 있음. '비동기 추론'이라는 이름의 모듈은 0.7.0 패키지에 없고, 그 역할(로봇이 움직이는 동안 다음 행동을 계산)을 이 기능이 함
+  - 그러나 **로봇(클라이언트) 쪽에도 LeRobot 이 설치되어야 해서 Isaac 환경(Python 3.11)에서는 못 씀**. 시뮬레이터를 LeRobot 에 붙이는 `lerobot-env-server`(EnvHub)도 같은 이유로 안 됨 (공식 문서: Isaac Sim 5·Isaac Lab 2 는 안 되고 Isaac Sim 6·Isaac Lab 3 을 쓰라고 함)
+  - 지금 버전으로 붙이는 방법: 7단계의 VLM 과 같은 방식 — Isaac 쪽 스크립트가 VLA 환경의 파이썬으로 작업자 프로세스를 띄우고, 관측(사진·상태·문장)을 보내 행동 묶음을 받음. 작업자 안에서는 `vla/infer_probe.py` 처럼 체크포인트의 전처리·모델·후처리를 그대로 씀
+  - 같은 GPU 에 올릴 때의 메모리 예상: Isaac 장면·걷기 정책 약 5.4GB(7단계 측정) + SmolVLA 추론 약 0.9GB. 7단계의 VLM(1.7GB)까지 함께 올리면 약 8GB (더한 값, 함께 돌려 보지 않음)
+
 ## 미해결 과제
+- 8단계 준비 (VLA 조사)
+  - 로봇에 붙이지 않았음: 시범 데이터가 없고(스크립트로 모을 수 있음), Isaac 쪽 저장·변환·작업자 연결은 설계만 확인
+  - Isaac 환경(Python 3.11)에는 LeRobot 을 설치할 수 없어 LeRobot 의 원격 추론·환경 서버를 그대로 쓰지 못함. Isaac Sim 6·Isaac Lab 3 으로 올리면 쓸 수 있다고 문서에 있으나, 올렸을 때 지금 과제·정책이 그대로 도는지는 확인하지 않음 (확인 필요)
+  - TorchCodec 이 Windows 에서 ffmpeg 를 불러오지 못하는 원인 (지금은 pyav 로 대체)
+  - 측정은 예제 데이터(카메라 2대, 상태·행동 6차원) 기준. 카메라 수·사진 크기가 다르면 메모리가 달라짐. 머리 카메라 한 대·행동 14~25차원일 때의 값은 재지 않음
+  - 상태·행동 상한(32)을 넘길 때 `smolvla_base` 가중치를 이어받는 방식, 2만 스텝 학습의 실제 시간, 학습한 모델의 성공률은 확인하지 않음
+  - 다른 후보(VLA-Adapter, Evo-1 등)는 문서 조사만 하고 돌려 보지 않음
 - 7단계 (VLM 판단 층)
   - 처음 보는 동사를 '할 수 없는 일'로 가려내는 것이 약함 ("흔들어 봐" 25개 중 17개). 없는 상자를 가리키면서 할 수 없는 일을 시킬 때 어느 거부 코드가 맞는지도 정답 규칙상 `unsupported_command` 하나로만 정해 둠
   - 평가·데모 모두 학습 데이터와 같은 장면(받침대 3개, 단색 상자 4색, 같은 시뮬레이터 렌더링). 실제 사진, 다른 물건·배경, 같은 색 상자 여러 개는 다루지 않음
