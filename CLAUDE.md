@@ -1203,7 +1203,7 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
 ### 연결 데모 (`scripts/vlm_pick_place_demo.py`, 2026-11-22)
 - 실행 (Isaac 환경, `VLM_PYTHON` = 별도 파인튜닝 환경의 파이썬):
   ```
-  python -u scriptslm_pick_place_demo.py --headless --video --kit_args "--/app/vulkan=false --/renderer/active=d3d12"
+  python -u scripts\vlm_pick_place_demo.py --headless --video --kit_args "--/app/vulkan=false --/renderer/active=d3d12"
   ```
   - 처음 배치: 왼쪽에 빨간 상자, 가운데에 파란 상자, 오른쪽은 빔 (`--layout`). 명령 3개 (`--commands`), 걷기 정책 v2 `model_3999`, 어댑터 `vlm/outputs/qwen35_08b/lora`
   - 명령마다: 처음 자리에서 머리 카메라 사진 저장 → 작업자에 사진 경로·명령 전달 → 계획 실행 → 처음 자리로 걸어서 돌아옴(뒤로·옆으로). `--plans` 로 VLM 없이 실행기만 시험할 수 있음
@@ -1217,7 +1217,7 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
   - 사진을 찍은 자리: 처음 0.5°, 한 번 다녀온 뒤 앞 −2.2cm·옆 −0.7cm·방향 −4.3° (데이터의 로봇 방향 범위 ±8° 안)
   - 생성 시간은 한 문장씩 생성한 값 (첫 번째는 처음 실행이라 더 걸림). 평가 때의 0.16초는 16개씩 묶은 값
 - 같은 GPU 에 VLM 과 Isaac 을 함께 올렸을 때의 메모리 (GPU 전체 사용량, 영상 녹화 포함): 장면·걷기 정책만 5.4GB → VLM 을 올린 뒤 7.3GB → 실행 중 7.9GB. VLM 프로세스가 잡은 메모리 1.7GB, 모델 불러오기 9~12초
-- 영상: `2026-11-22_14-16-13_loco_v2ideoslm_demolm_demo-step-0.mp4` (고정 카메라, 로봇 뒤 오른쪽 위), 사진 `vlm_demo_cmd1~3.png`, 시간표 `vlm_demo_timeline.json`
+- 영상: `2026-11-22_14-16-13_loco_v2\videos\vlm_demo\vlm_demo-step-0.mp4` (고정 카메라, 로봇 뒤 오른쪽 위), 사진 `vlm_demo_cmd1~3.png`, 시간표 `vlm_demo_timeline.json`
   - 자막 영상: `python scripts\make_caption_video.py --dir <위 폴더> --name vlm_demo --out portfolio\g1_vlm_pick_place.mp4 --gif portfolio\g1_vlm_pick_place.gif` → 아래쪽에 명령·VLM 출력 JSON·결과, 오른쪽 위에 그때의 머리 카메라 사진
   - portfolio: `g1_vlm_pick_place.mp4` (1280x720, 80초, 3.7MB), `g1_vlm_pick_place.gif` (720x405, 8fps, 3배속, 3.9MB)
 - 판정: 3/3 → **통과**
