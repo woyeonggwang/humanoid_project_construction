@@ -1,6 +1,6 @@
 """SmolVLA 미세조정: 로컬 LeRobot 데이터셋(vla/convert_to_lerobot.py 가 만든 것)으로 lerobot-train 을 부른다.
 
-- 기본 설정 그대로 학습한다 (행동 부분만 학습, 시각 인코더·VLM 고정). 데이터의 머리 카메라를 smolvla_base 의 camera1 자리에 넣는다
+- 기본 설정 그대로 학습한다 (행동 부분만 학습, 시각 인코더·VLM 고정). --train_vlm 이면 VLM 도 학습한다 (시각 인코더는 고정). 데이터의 머리 카메라를 smolvla_base 의 camera1 자리에 넣는다
 - 이 프로세스가 쓸 GPU 메모리에 상한을 건다 (--cap_gb). 넘으면 시스템 메모리로 넘쳐 느려지는 대신 오류로 멈춘다
 - Windows 에서는 모델 이름을 그대로 넘기면 경로로 바뀌어 실패하므로 먼저 내려받아 로컬 경로를 넘긴다 (CLAUDE.md 8단계 준비 시행착오)
 
@@ -28,6 +28,8 @@ def main():
     ap.add_argument("--seed", type=int, default=1000)
     ap.add_argument("--out", required=True)
     ap.add_argument("--cap_gb", type=float, default=10.5)
+    ap.add_argument("--train_vlm", action="store_true",
+                    help="VLM(언어·사진을 함께 읽는 부분)도 학습. 시각 인코더는 고정. 명령의 낱말을 구분해야 하는 과제용 (메모리가 더 듦)")
     args = ap.parse_args()
 
     import torch
@@ -52,6 +54,8 @@ def main():
         f"--seed={args.seed}",
         "--policy.device=cuda",
         "--policy.push_to_hub=false",
+        f"--policy.train_expert_only={'false' if args.train_vlm else 'true'}",
+        "--policy.freeze_vision_encoder=true",
         "--trackio.enable=false",
         f"--log_freq={args.log_freq}",
         "--save_checkpoint=true",
