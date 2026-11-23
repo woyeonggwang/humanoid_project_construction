@@ -33,10 +33,12 @@ G = 9.81
 # ---------------------------------------------------------------------------
 GRASP_X, GRASP_Z = -0.08, 0.04  # 상자 좌표에서 본 손(palm 원점) 잡는 위치의 앞뒤·높이
 #   손가락이 palm 원점보다 앞 16cm·아래 9cm 까지 내려가므로 손 전체가 옆면 가운데에 오게 뒤·위로 둠
-GRASP_GAP = 0.09  # 상자 옆면에서 palm 원점까지의 거리 (5단계 값: 엄지 끝이 안쪽으로 약 7cm 라고 어림한 값 + 여유)
-#   엄지는 관절을 어떻게 움직여도 palm 원점보다 안쪽으로 5.4cm 이상 나온다 (2026-11-22 측정: 엄지 관절 3개를 한계 안에서
-#   5×5×5 로 바꿔 가며 엄지 링크 형상의 가장 안쪽 점을 잼. 최소 5.4cm, 기본 자세 근처도 5.4cm, 최대 10.8cm)
-#   → 엄지를 펴서 손바닥을 옆면에 붙일 수는 없고, 틈은 5.4cm + 여유까지만 줄일 수 있음
+GRASP_GAP = 0.07  # 상자 옆면에서 palm 원점까지의 거리
+#   손바닥을 옆면에 붙일 수는 없다: 엄지 뿌리가 손바닥 안쪽 면에서 나와 있어, 엄지 관절을 어떻게 움직여도 palm 원점보다
+#   안쪽으로 5.4cm 이상 나온다 (2026-11-22 측정: 엄지 관절 3개를 한계 안에서 5×5×5 로 바꿔 가며 엄지 링크 형상의 가장 안쪽 점을 잼)
+#   0.07 = 엄지가 옆면에 거의 닿는 거리 (2026-11-23 측정, hand_box_clearance: 손 형상과 옆면 사이 틈이 붙이는 순간 평균 0.8cm,
+#   들고 있는 동안 최소 0.1cm. 0.065 는 들고 있는 동안 최대 1.5cm 파고듦, 5단계의 0.09 는 틈 3.1cm)
+LEGACY_GRASP_GAP = 0.09  # 5단계 값 (--legacy 로 5단계 동작을 다시 볼 때)
 STANCE_DIST = 0.36  # 멈출 때 골반에서 상자(받침대) 중심까지의 거리. 잡는 손 위치가 골반 앞 0.28m = 닿는 범위(0.20~0.35m)의 가운데
 OPEN_POSE = (0.30, 0.31, 0.125)  # 벌린 자세 (좌우 ±). 이 자세로 받침대에 다가가면 손이 상자 양옆을 지나감
 CARRY_BOX_X, CARRY_BOX_Z = 0.28, 0.20  # 상자를 든 자세의 손 위치 (좌우는 잡은 간격 그대로). 상자 아랫면이 받침대 윗면보다 약 9cm 높음
@@ -149,7 +151,7 @@ class PickPlaceMachine:
         # 기록
         keys = ("stance_a_x", "stance_a_y", "stance_a_yaw", "grasp_err", "stance_b_x", "stance_b_y", "stance_b_yaw",
                 "place_err_before", "place_xy", "place_z", "lift_tilt", "t_pick", "t_total", "box_shift",
-                "stop_turn_a", "stop_turn_b")
+                "stop_turn_a", "stop_turn_b", "hand_clear", "hand_clear_min")
         self.rec = {k: torch.full((n,), float("nan"), device=dev) for k in keys}
         self.box_dev_air, self.box_dev_table = z(n), z(n)
         self.pick_tilt_max = z(n)
@@ -266,9 +268,48 @@ class PickPlaceMachine:
         forces[self.attached, 0, 2] = self.box_mass * G
         self.box.set_external_force_and_torque(forces, torch.zeros(self.n, 1, 3, device=self.device), is_global=True)
 
+    HAND_LINKS = ("palm", "zero", "one", "two", "three", "four", "five", "six")  # 손바닥, 엄지 3마디, 나머지 손가락
+
+    def hand_box_clearance(self) -> torch.Tensor:
+        """손(손바닥·손가락 링크의 형상)과 상자 옆면 사이의 좌우 틈 (N,) m. 양손 중 작은 값, 음수 = 상자 안으로 들어감.
+
+        링크마다 형상의 경계 상자(링크 좌표)를 한 번 읽어 3×3×3 점으로 나누고, 지금 자세로 옮겨 상자 좌표에서 본다.
+        상자의 앞뒤·높이 범위 안에 있는 점만 보고 |좌우 위치| − 상자 폭의 절반 을 잰다 (경계 상자라 실제 형상보다 조금 크게 잡힘).
+        """
+        from isaaclab.utils.math import quat_apply
+
+        if not hasattr(self, "_hand_pts"):
+            import omni.usd
+            from pxr import Usd, UsdGeom
+
+            stage = omni.usd.get_context().get_stage()
+            cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.render])
+            self._hand_pts, self._hand_ids = [], []
+            for side in ("left", "right"):
+                for part in self.HAND_LINKS:
+                    name = f"{side}_{part}_link"
+                    rng = cache.ComputeUntransformedBound(stage.GetPrimAtPath(f"/World/envs/env_0/Robot/{name}")).ComputeAlignedRange()
+                    lo, hi = rng.GetMin(), rng.GetMax()
+                    axes = [[lo[k] + (hi[k] - lo[k]) * f for f in (0.0, 0.5, 1.0)] for k in range(3)]
+                    self._hand_pts.append(torch.tensor([[x, y, z] for x in axes[0] for y in axes[1] for z in axes[2]], device=self.device))
+                    self._hand_ids.append(self.robot.body_names.index(name))
+        clear = torch.full((self.n,), float("inf"), device=self.device)
+        box_pos, box_yaw = self.box.data.root_pos_w, yaw_of(self.box.data.root_quat_w)
+        for pts, bid in zip(self._hand_pts, self._hand_ids):
+            k = pts.shape[0]
+            quat = self.robot.data.body_quat_w[:, bid][:, None, :].expand(-1, k, -1).reshape(-1, 4)
+            w = self.robot.data.body_pos_w[:, bid][:, None, :] + quat_apply(quat, pts[None].expand(self.n, -1, -1).reshape(-1, 3)).reshape(self.n, k, 3)
+            rel = rot_z(-box_yaw[:, None].expand(-1, k), w - box_pos[:, None, :])
+            near = (rel[..., 0].abs() < BOX_SIZE[0] / 2) & (rel[..., 2].abs() < BOX_SIZE[2] / 2)
+            gap = torch.where(near, rel[..., 1].abs() - BOX_SIZE[1] / 2, torch.full_like(rel[..., 1], float("inf")))
+            clear = torch.minimum(clear, gap.min(dim=1).values)
+        return clear
+
     def _attach(self, mask: torch.Tensor):
         if not bool(mask.any()):
             return
+        self.rec["hand_clear"][mask] = self.hand_box_clearance()[mask]
+        self.rec["hand_clear_min"][mask] = self.rec["hand_clear"][mask]
         mid, psi = self.hand_frame()
         self.att_off[mask] = rot_z(-psi, self.box.data.root_pos_w - mid)[mask]
         self.att_yaw[mask] = wrap(yaw_of(self.box.data.root_quat_w) - psi)[mask]
@@ -293,6 +334,8 @@ class PickPlaceMachine:
         att = self.attached
         if not bool(att.any()):
             return
+        if self.step % 10 == 0:  # 들고 있는 동안 손이 상자 안으로 들어가는지 (0.2초마다)
+            self.rec["hand_clear_min"][att] = torch.minimum(self.rec["hand_clear_min"], self.hand_box_clearance())[att]
         mid, psi = self.hand_frame()
         pos = mid + rot_z(psi, self.att_off)
         pos[:, 2] = torch.maximum(pos[:, 2], self.att_floor)

@@ -33,7 +33,7 @@ parser.add_argument("--num_envs", type=int, default=1)
 parser.add_argument("--until", type=str, default="full", choices=["lift", "full"], help="lift: 들어 올린 뒤 2초 유지하고 끝")
 parser.add_argument("--randomize", action="store_true", help="상자(와 받침대 A) 시작 위치를 좌우·앞뒤 ±10cm, 방향 ±15° 로 바꿈")
 parser.add_argument("--box_mass", type=float, default=None, help="상자 무게 kg (기본: 설정값)")
-parser.add_argument("--grasp_gap", type=float, default=None, help="상자 옆면에서 palm 원점까지의 거리 m (기본: 0.09)")
+parser.add_argument("--grasp_gap", type=float, default=None, help="상자 옆면에서 palm 원점까지의 거리 m (기본: pick_place_machine.GRASP_GAP)")
 parser.add_argument("--max_time", type=float, default=75.0, help="최대 진행 시간 (초)")
 parser.add_argument("--video", action="store_true", help="환경 0 을 따라가며 녹화 (num_envs 1 권장)")
 parser.add_argument("--view", type=str, default="side", choices=["side", "front"], help="녹화 시점: 옆모습 / 앞에서 비스듬히")
@@ -112,7 +112,7 @@ policy = runner.get_inference_policy(device=device)
 run_name = os.path.join(os.path.basename(os.path.dirname(resume_path)), os.path.basename(resume_path))
 print(f"[pick] 체크포인트: {run_name} ({'5단계 보정 사용' if args_cli.legacy else '스크립트 보정 없음'})")
 
-grasp_gap = ppm.GRASP_GAP if args_cli.grasp_gap is None else args_cli.grasp_gap
+grasp_gap = args_cli.grasp_gap if args_cli.grasp_gap is not None else (ppm.LEGACY_GRASP_GAP if args_cli.legacy else ppm.GRASP_GAP)
 machine = ppm.PickPlaceMachine(u, legacy=args_cli.legacy, grasp_gap=grasp_gap, until=args_cli.until, debug=args_cli.debug)
 obs_filter = PolicyObsFilter(u, robot) if args_cli.legacy else (lambda o: o)
 cmd_term = u.command_manager.get_term("base_velocity")
@@ -205,6 +205,11 @@ print(f"멈춘 자리가 범위 밖이라 다시 다가간 횟수: A 평균 {mac
       f"B 평균 {machine.reapproach_b.float().mean().item():.2f}·최대 {int(machine.reapproach_b.max())}")
 print(f"붙이기 직전 손 위치 오차 (cm, 양손 중 큰 값): {stat('grasp_err')}")
 print(f"붙이기 직전까지 상자가 처음 자리에서 밀린 거리 (cm): {stat('box_shift')}")
+for key, label in (("hand_clear", "붙이는 순간"), ("hand_clear_min", "들고 있는 동안 최소")):
+    v = rec[key][torch.isfinite(rec[key])] * 100
+    if len(v):
+        print(f"손(손바닥·손가락 형상)과 상자 옆면 사이의 틈, {label} (cm, 음수 = 상자 안으로 들어감): "
+              f"평균 {v.mean().item():.2f}, 최소 {v.min().item():.2f}, 최대 {v.max().item():.2f} ({len(v)}개)")
 print(f"붙은 상자가 두 손 기준 자리에서 벗어난 거리 (cm, 한 스텝 뒤, 환경별 최대값): 공중 평균 {machine.box_dev_air.mean().item() * 100:.3f}·"
       f"최대 {machine.box_dev_air.max().item() * 100:.3f}, 받침대에 닿은 동안 평균 {machine.box_dev_table.mean().item() * 100:.2f}·최대 {machine.box_dev_table.max().item() * 100:.2f}")
 print(f"들어 올리는 동안 골반 기울기 최대 (°): {stat('lift_tilt', 1.0)}")
