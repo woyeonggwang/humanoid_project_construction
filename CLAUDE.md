@@ -19,13 +19,17 @@
 humanoid_project/
 ├─ humanoid_tasks/g1_carry/   과제: __init__.py(gym 등록), env_cfg.py(환경), agents.py(PPO), carry_mdp.py(이벤트·관측·보상), carry_commands.py(명령 생성기),
 │                             pick_place_cfg.py(상자 집어 옮기기 장면), arm_ik.py(양팔 IK·몸통 좌표·정책 관측 거르기),
-│                             pick_place_machine.py(상자 집어 옮기기 상태 머신), vlm_scene_cfg.py·vlm_scene.py(VLM 장면: 받침대 3개·색 상자·머리 카메라)
+│                             pick_place_machine.py(상자 집어 옮기기 상태 머신), vlm_scene_cfg.py·vlm_scene.py(VLM 장면: 받침대 3개·색 상자·머리 카메라),
+│                             vla_pick_cfg.py(VLA 장면: 아래를 보는 머리 카메라, 2차용 넓은 받침대·작은 상자), vla_pick.py(VLA 관측·행동·붙이기 규칙·성공 판정)
 ├─ scripts/                   _launch.py(공통), train.py, play.py, inspect_g1.py(점검), eval_carry.py(정책 평가·걸음 지표), record_compare.py(근접 비교 영상),
 │                             ik_check.py(IK 닿는 범위·서서 팔 뻗기), pick_place_demo.py(상자 집어 옮기기 실행·평가·녹화), eval_stop.py(걷다가 멈추기 평가),
-│                             make_vlm_data.py(VLM 데이터 생성), vlm_pick_place_demo.py(VLM 연결 데모), make_caption_video.py(자막 영상)
+│                             make_vlm_data.py(VLM 데이터 생성), vlm_pick_place_demo.py(VLM 연결 데모), make_caption_video.py(자막 영상),
+│                             collect_vla_demos.py(VLA 시범 수집), vla_pick_eval.py(VLA·스크립트 실행·평가·녹화), make_vla_video.py(VLA 영상 편집)
 ├─ vlm/                       VLM 판단 층: schema.py(명령 체계), templates.py(문장 템플릿), common.py, train.py(LoRA), evaluate.py, infer_worker.py(실행용 작업자),
 │                             data/(jsonl 은 git 포함, images/ 는 제외), results/(문장별 평가 출력), outputs/(어댑터, git 제외)
-├─ vla/                       VLA 조사: train_probe.py(SmolVLA 학습 메모리·시간 측정), infer_probe.py(행동 출력 메모리·지연 측정). 별도 VLA 환경에서 실행
+├─ vla/                       VLA: train_probe.py·infer_probe.py(메모리·시간 측정), convert_to_lerobot.py(시범 원자료 → LeRobot 형식), render_dataset.py(변환 확인),
+│                             train.py(SmolVLA 미세조정), policy_worker.py(행동 출력 작업자). 별도 VLA 환경에서 실행
+├─ data/                      VLA 시범 원자료·변환한 데이터셋·학습 결과·평가 결과 (git 제외)
 ├─ logs/                      학습 기록 (git 제외)
 ├─ outputs/                   Hydra 실행 기록 (git 제외)
 └─ portfolio/                 (git 제외)
@@ -36,8 +40,8 @@ humanoid_project/
   - Isaac Lab 위치는 환경 변수 ISAACLAB_PATH, 없으면 설치된 isaaclab 패키지 위치에서 계산
   - gym.register 는 Isaac Sim 앱이 켜지기 전에 실행되므로 설정 위치를 문자열로만 넘기고 isaaclab 모듈은 import 하지 않음 (앱 전 import 시 오류 여부는 확인 필요)
 - 원격 저장소: https://github.com/woyeonggwang/humanoid_project_construction (2026-11-19 구성, `main` 브랜치). 커밋 전 개인정보(로컬 경로·PC 사양·이메일) 검사
-- 브랜치 (2026-11-20): `main` = 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지 (2026-11-20 `gait_reward` 를 합침. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22), `vlm_planner` = `loco_v2` 에서 갈라져 VLM 판단 층 (7단계, 2026-11-22). `vla_probe` = `vlm_planner` 에서 갈라져 VLA 조사 (8단계 준비, 2026-11-23, push 하지 않음). `pick_place`·`loco_v2`·`vlm_planner` 는 2026-11-23 원격에 올림 (main 병합은 하지 않음)
-- .gitignore: `portfolio/`, `logs/`, `outputs/`, `__pycache__/`, `*.pt`, `vlm/data/images/`, `vlm/outputs/` (`outputs/` 규칙에 함께 걸림), `vlm/unsloth_compiled_cache/`
+- 브랜치 (2026-11-20): `main` = 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지 (2026-11-20 `gait_reward` 를 합침. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22), `vlm_planner` = `loco_v2` 에서 갈라져 VLM 판단 층 (7단계, 2026-11-22). `vla_probe` = `vlm_planner` 에서 갈라져 VLA 조사 (8단계 준비, 2026-11-23, push 하지 않음), `vla_pick` = `vla_probe` 에서 갈라져 VLA 상체 제어 (8단계, 2026-11-23, push 하지 않음). `pick_place`·`loco_v2`·`vlm_planner` 는 2026-11-23 원격에 올림 (main 병합은 하지 않음)
+- .gitignore: `portfolio/`, `logs/`, `outputs/`, `__pycache__/`, `*.pt`, `data/`(VLA 시범·학습 결과), `vlm/data/images/`, `vlm/outputs/` (`outputs/` 규칙에 함께 걸림), `vlm/unsloth_compiled_cache/`
   - `outputs/`: train.py·play.py 실행 때 Hydra 가 실행 위치에 만드는 실행 기록. hydra.yaml 에 실행 폴더의 절대 경로가 들어가므로 올리지 않음
   - `logs/`: 체크포인트·영상이 커서 올리지 않음
 - `portfolio/`: 블로그·포트폴리오용 결과물(GIF·영상). **git 에 올리지 않음**
@@ -53,6 +57,7 @@ humanoid_project/
   - `portfolio/g1_loco_v2_play.mp4`, `g1_loco_v2_play.gif`: 6단계 걷기 정책 v2 본 학습(`2026-11-22_14-16-13_loco_v2`, model_3999) play 영상, 팔·손가락 무작위 움직임 켬 (mp4 1.5MB, GIF 800x450·15fps 6.1MB)
   - `portfolio/g1_pick_place_v2_play.mp4/.gif`(옆), `g1_pick_place_v2_front.mp4/.gif`(앞): v2 정책으로 스크립트 보정 없이 상자 집어 옮기기 (한 대, 상자 3kg, 손 간격 7cm, 36.8초. GIF 720x405·640x360, 10fps·2.5배속, 7.2·7.8MB. 2026-11-23 다시 녹화)
   - `portfolio/g1_vlm_pick_place.mp4`, `g1_vlm_pick_place.gif`: 7단계 VLM 연결 데모 (명령 3개, 명령·VLM 출력 자막과 머리 카메라 사진 포함. mp4 80초 3.7MB, GIF 720x405·8fps·3배속 3.9MB)
+  - `portfolio/g1_vla_pick_side.mp4/.gif`, `g1_vla_pick_front.mp4/.gif`, `g1_vla_pick_compare.mp4/.gif`, `g1_vla_pick_compare_front.mp4/.gif`: 8단계 1차 — VLA 가 팔을 움직여 상자를 집어 드는 영상(옆·앞)과 스크립트 IK 와 나란히 놓은 비교 (아래 8단계 "1차 영상")
   - `portfolio/g1_carry_armrand_scratch_play.mp4`, `g1_carry_armrand_scratch_play.gif`: 팔 무작위판 처음부터 학습(`2026-11-20_20-54-06_armrand_scratch`, model_3999, 4단계 비교 기준) play 영상 (mp4 1.7MB, GIF 8.7MB)
 
 ## 확정된 설계 결정
@@ -1377,7 +1382,115 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
   - 지금 버전으로 붙이는 방법: 7단계의 VLM 과 같은 방식 — Isaac 쪽 스크립트가 VLA 환경의 파이썬으로 작업자 프로세스를 띄우고, 관측(사진·상태·문장)을 보내 행동 묶음을 받음. 작업자 안에서는 `vla/infer_probe.py` 처럼 체크포인트의 전처리·모델·후처리를 그대로 씀
   - 같은 GPU 에 올릴 때의 메모리 예상: Isaac 장면·걷기 정책 약 5.4GB(7단계 측정) + SmolVLA 추론 약 0.9GB. 7단계의 VLM(1.7GB)까지 함께 올리면 약 8GB (더한 값, 함께 돌려 보지 않음)
 
+## 8단계: VLA 상체 제어 (`vla_pick` 브랜치, 2026-11-23~)
+- 목적: 팔 동작(뻗기 → 잡기 → 들기)을 스크립트 IK 대신 사진·상태·명령을 보고 행동을 내는 모델(SmolVLA)이 하게 한다
+- 결정 (2026-11-23 사용자): Isaac 버전은 그대로 두고 직접 연결, VLA 는 팔만 맡고 걷기·균형은 걷기 정책 v2 그대로, 시범 데이터는 지금의 상자 집기 스크립트로 자동 수집(성공한 것만), 브랜치 `vla_pick`(`vla_probe` 에서 갈라짐, push·main 병합 안 함)
+- 환경: 수집·실행은 Isaac 환경, 변환·학습·VLA 작업자는 8단계 준비에서 만든 VLA 환경 (LeRobot 0.7.0). 학습 중에는 Isaac 을 띄우지 않음
+- 파일
+  - `humanoid_tasks/g1_carry/vla_pick_cfg.py`: 장면 (`Humanoid-G1-VLA-Pick-v0` = 7단계 장면 + 아래를 보는 머리 카메라, `Humanoid-G1-VLA-Pick2-v0` = 2차용 넓은 받침대·작은 상자 추가)
+  - `humanoid_tasks/g1_carry/vla_pick.py`: 관측·행동 정의, 장면 무작위화, 붙이기 규칙(`VlaArmExecutor`), 성공 판정(`LiftTracker`), 2차 시범 스크립트(`SidePickScript`)
+  - `scripts/collect_vla_demos.py`(시범 수집, Isaac), `vla/convert_to_lerobot.py`(변환), `vla/render_dataset.py`(변환 확인 영상), `vla/train.py`(미세조정), `vla/policy_worker.py`(행동 출력 작업자), `scripts/vla_pick_eval.py`(Isaac 안에서 실행·평가·녹화), `scripts/make_vla_video.py`(자막·비교 영상)
+  - `pick_place_machine.py` 에 더한 것: 환경별 상자 무게, `until="stand"`(받침대 앞에 서는 데까지만), `reset()`, 상자 크기·손별 잡는 위치 바꾸기(`set_grasp_geometry`)
+
+### 행동·관측 설계 (`vla_pick.py`)
+| 항목 | 내용 |
+|---|---|
+| 사진 | 머리 카메라 한 대, 256x256 RGB (`vla_cam`) |
+| 상태 (11) | 팔 10관절 위치 (왼팔 어깨 pitch·roll·yaw, 팔꿈치 pitch·roll, 오른팔 같은 순서) + 잡기 상태 (0 빈손 / 1 상자가 붙어 있음) |
+| 행동 (11) | 팔 10관절 목표값 + 잡기 신호 (0 놓기 / 1 잡기) |
+| 명령 | 한국어 문장. 1차 5가지: "상자를 집어", "상자 들어 줘", "상자를 들어 올려", "앞에 있는 상자를 집어 줘", "상자 잡아서 들어" |
+| 주기 | 50Hz (제어 주기 그대로, 줄이지 않음). 행동 묶음 50스텝 = 1초 분량 |
+- 잡기 신호가 1 이고 양손이 잡는 위치에서 4cm 안이면 붙이고, 0 이 되면 뗀다. 붙이기·떼기는 5단계의 것 그대로 (`PickPlaceMachine._attach`·`_detach`: 상자를 두 손 기준 자리에 고정, 손 질량에 상자 무게를 더함). 스크립트는 3cm 안에 0.2초 머문 뒤 붙임
+- 팔 목표값은 관절 한계로 자르고 한 스텝에 0.04 rad(2 rad/s)까지만 바뀌게 함 (스크립트 IK·걷기 정책 학습과 같은 속도 상한). 손가락은 건드리지 않음 (기본 자세 그대로)
+- 상태·행동이 11차원이라 SmolVLA 의 상한 32 를 바꾸지 않음
+- 머리 카메라를 새로 둔 이유: 7단계 카메라는 멀리 있는 받침대 세 개를 보려고 26° 만 숙였는데, 받침대 앞 0.36m 에 서면 상자와 손이 화면 아래로 벗어남. 같은 자리(몸통 기준 앞 0.10m·위 0.43m, 가로 시야각 약 70°)에서 **58° 숙인** 카메라를 씀 — 45·52·58·65·72° 를 찍어 비교했을 때 상자가 화면 가운데 위쪽에 오고 양손·아래팔이 양옆에 들어오는 각도
+- 해상도 256x256 의 근거: SmolVLA 는 사진을 비율을 유지한 채 512x512 로 맞춰 넣으므로 정사각형이면 채우는 곳이 없고, `smolvla_base` 가 기대하는 카메라 입력 모양이 (3, 256, 256). 448·512 로 찍으면 원자료가 3~4배 커짐 (256 일 때 에피소드당 22MB)
+- 기록 주기를 줄이지 않은 이유: 제어 주기와 같으면 행동을 그대로 한 스텝씩 적용할 수 있어 보간이 필요 없음. 에피소드가 6.2초(310스텝)로 짧아 프레임 수 부담이 작음 (208개 = 64,480 프레임)
+- 한 줄의 시점: k 번째 줄의 사진·상태 = k 번째 `env.step` 을 부르기 직전의 것, 행동 = 그 스텝에 넣은 팔 목표값과 그 스텝이 끝났을 때의 잡기 신호
+- 한국어 명령: SmolVLA 의 토크나이저는 한글을 글자당 3토큰(바이트 단위)으로 쪼갬. 가장 긴 문장이 31토큰으로 상한 48 안 (2차의 색 문장 포함). `smolvla_base` 모델 카드의 언어는 영어뿐이고 VLM 은 학습하지 않으므로, 모델이 한국어의 뜻을 아는 것이 아니라 문장마다 다른 토큰열을 구분하는 것
+
+### 1차: 상자 앞에 선 상태에서 뻗기 → 잡기 → 들기
+#### 1-1. 시범 수집 (`scripts/collect_vla_demos.py`, Isaac 환경)
+- 한 에피소드: 상태 머신이 받침대 앞까지 걷고 멈춘 뒤(기록하지 않음), 손을 뻗기 시작하는 스텝부터 든 자세에서 1초 머문 데까지 = 손 뻗기 100 + 붙이기 대기 10 + 6cm 들기 50 + 든 자세로 100 + 유지 50 = 310스텝 (6.2초)
+- 성공한 것만 저장: 상자가 붙은 채 처음 높이보다 5cm 넘게 들려 0.5초 유지 + 넘어지지 않음 (`LiftTracker`, 평가와 같은 기준)
+- 무작위화: 받침대와 상자를 함께 앞뒤·좌우 ±10cm·방향 ±15° (로봇은 상자를 마주 보게 다가감, 5·6단계 평가와 같은 방식), 받침대 위 상자 ±1cm·±3°, 상자 무게 2~3kg, 상자 색 4가지(묶음마다 하나), 조명 세기·해 방향(묶음마다), 명령 문장 5가지
+  - 로봇이 걸어가서 서므로, 팔이 움직이기 시작할 때 로봇과 상자의 상대 위치는 '멈춘 자리의 오차'만큼만 달라짐 (허용 범위 앞 −8~+3cm·좌우 ±5cm·방향 ±5.7°)
+  - 색이 묶음마다 하나인 이유: 상태 머신이 한 번에 한 종류의 상자만 다룸. 조명은 모든 환경이 함께 씀
+- 시점 확인 (`--sync_check`): 손을 뻗는 도중 한 스텝 K 에서 `env.step` 직전에 상자를 20cm 위로 순간 이동시키고 앞뒤 사진을 비교 → 이웃한 사진의 평균 밝기 차이가 K→K+1 48.9, K+1→K+2 2.1, K+2→K+3 1.1. 옮긴 바로 다음 사진에 반영됨 = **사진이 한 스텝도 늦지 않음**
+- 10개 시험 수집으로 본 것: 길이 310스텝, 잡기 신호(행동)가 1 이 되는 스텝 109·잡기 상태(상태)가 1 이 되는 스텝 110 (신호 다음 스텝에 상태가 바뀜), |목표값(t) − 관절 위치(t+1)| 평균 0.019~0.021 rad, 한 스텝에 목표값이 바뀐 최대 0.017~0.021 rad, 사진에서 손이 닿은 뒤 상자가 들림
+- 본 수집: `python -u scripts\collect_vla_demos.py --headless --episodes 208 --num_envs 16 --seed 100 --out data\vla_pick\raw_v1 --kit_args "--/app/vulkan=false --/renderer/active=d3d12"` → **208개 (13묶음, 시도 208개 모두 성공)**, 1242초, 원자료 4.3GB (`ep_000000.npz` …: images·state·action·meta)
+  - `data/` 는 git 에서 제외 (.gitignore)
+
+#### 1-2. LeRobot 형식 변환 (`vla/convert_to_lerobot.py`, VLA 환경)
+- `python vla\convert_to_lerobot.py --raw data\vla_pick\raw_v1 --root data\vla_pick\lerobot_v1` → 에피소드 208, 프레임 64,480, 50fps, 사진은 AV1 영상으로 압축, 177MB (약 10분 30초). 로컬에만 둠 (Hub 에 올리지 않음)
+  - 항목: `observation.images.head`(영상 256x256), `observation.state`(11), `action`(11), 작업 문장. 문장별 에피소드 수 36~54
+- 확인 (`python vla\render_dataset.py --root data\vla_pick\lerobot_v1 --episodes 0,100,207 --out data\vla_pick\check_v1 --raw data\vla_pick\raw_v1`): LeRobot 으로 다시 읽어 사진 + 관절 위치·목표값 막대 + 잡기 상태·신호를 영상으로 그림. 세 에피소드 모두 프레임 수·문장이 원자료와 같고, **상태·행동의 최대 차이 0**, 사진은 영상 압축 때문에 평균 1.7/255 차이
+
+#### 1-3. 미세조정 (`vla/train.py`, VLA 환경)
+- `smolvla_base`, 기본 설정(행동 부분만 학습, 학습 파라미터 1억), 배치 32. 데이터의 머리 카메라를 모델의 `camera1` 자리에 넣음 (`--rename_map`). 한 바퀴 = 약 2000스텝 (64,480 프레임 ÷ 32)
+- 짧은 학습: `python vla\train.py --dataset_root data\vla_pick\lerobot_v1 --steps 2000 --batch 32 --out data\vla_pick\train\short_2k` → 648초, 최대 5.45GB, 스텝당 0.32초. 손실 0.73(100스텝) → 0.14(200) → 0.074(500) → 0.026(2000) — 내려감
+  - 이 모델을 Isaac 에서 실행: 학습 범위 안 100개씩, 행동 묶음 중 10·25·50스텝 실행 모두 100/100 성공 (아래 표의 '짧은 학습' 줄)
+- 본 학습 스텝 수: **8000 (4바퀴)** 로 정함. 2000스텝에서 이미 모두 성공했지만 손실이 아직 내려가고 있었고, 붙이기 직전 손 위치 오차의 최대가 3.4~3.9cm 로 붙이는 조건(4cm)에 가까웠음
+- 본 학습: `python vla\train.py --dataset_root data\vla_pick\lerobot_v1 --steps 8000 --batch 32 --save_freq 2000 --out data\vla_pick\train\main_8k` → 2498초(42분), 최대 5.45GB. 손실 0.058(1000) → 0.038(2000) → 0.021(4000) → 0.013(6000) → 0.011(8000)
+- 라이선스: `lerobot/smolvla_base` 모델 카드 표기 Apache 2.0 (바탕 VLM `SmolVLM2-500M-Video-Instruct` 도 Apache 2.0) → README 에 적음
+
+#### 1-4. Isaac 안에서 실행 (`scripts/vla_pick_eval.py` + `vla/policy_worker.py`)
+- 연결: 7단계 VLM 과 같은 방식. Isaac 쪽 스크립트가 VLA 환경의 파이썬으로 작업자를 띄우고(`--vla_python` 또는 환경 변수 `VLA_PYTHON`), 관측(사진·상태·명령)을 npz 파일로 써서 경로를 표준 입력으로 보내면 작업자가 행동 묶음 (환경 수, 50, 11)을 npy 파일로 돌려줌. 작업자는 체크포인트에 저장된 전처리·후처리를 그대로 씀
+  - 여러 환경을 한꺼번에 평가: 모든 환경이 받침대 앞에 선 뒤 팔 동작을 함께 시작하고, 진행 중인 환경의 관측을 한 묶음으로 보냄. 응답을 기다리는 동안 시뮬레이션은 멈춰 있음 (실시간 아님)
+  - 작업자: 모델 불러오기 4.6~5.0초, GPU 0.9GB. 응답 한 번(환경 16~25개 묶음) 평균 0.30~0.36초
+- 평가 방법: 받침대 앞까지 걷고 멈추는 것은 VLA·스크립트 모두 상태 머신이 함 (`until="stand"`). 그 뒤 팔 동작만 다름. 서지 못한 환경은 뺌 (이번 평가에서는 없었음)
+  - 성공 (두 방식 공통): 상자가 붙은 채 처음 높이보다 5cm 넘게 들려 0.5초 유지, 넘어지지 않음. 제한 시간 12초
+  - 실패 단계 (VLA): 못 닿음(손이 잡는 위치 4cm 안에 한 번도 못 옴) / 잡기 신호 시점 틀림(닿았는데 그때 신호가 0) / 들다 놓침 / 붙였지만 못 듦 / 넘어짐
+  - 조건마다 100개 (환경 25개 × 4묶음), 스크립트와 VLA 는 같은 시드 = 같은 장면
+- 조건
+  | 이름 | 내용 |
+  |---|---|
+  | 학습 범위 안 | 받침대·상자 ±10cm·±15° (시범과 같음) |
+  | 넓은 범위 | 받침대·상자 ±15cm·±20°. 로봇이 걸어가서 서므로 팔이 움직이기 시작할 때의 상대 위치는 학습 때와 거의 같고, 바뀌는 것은 주로 배경(바닥 무늬)과 걸어온 거리 |
+  | 서는 자리 벗어남 | 로봇이 상자 정면에서 옆으로 6~10cm, 비스듬히 6~10° 벗어나 서게 함 (`--stance_y 0.06,0.10 --stance_yaw 6,10`). 시범에는 없던 상대 위치 (시범은 좌우 ±5cm·방향 ±5.7° 안) |
+- 결과 (본 학습 8000스텝, 행동 묶음 중 25스텝 실행)
+  | 조건 | 스크립트 IK: 성공 / 걸린 시간 | VLA: 성공 / 걸린 시간 | VLA 실패 단계 |
+  |---|---|---|---|
+  | 학습 범위 안 | 100/100 / 3.51초 | **100/100** / 3.48초 | — |
+  | 넓은 범위 | 100/100 / 3.52초 | 99/100 / 3.53초 | 잡기 신호 시점 틀림 1 |
+  | 서는 자리 벗어남 | 94/100 / 3.59초 (실패: 손 위치 맞추기 6) | **33/100** / 4.12초 | 못 닿음 66, 잡기 신호 시점 틀림 1 |
+  - 넘어짐은 모든 조건에서 0
+  - 걸린 시간 = 팔을 움직이기 시작해서 성공 판정까지 (성공한 것의 평균)
+  - 서는 자리를 벗어나게 하면 VLA 는 손을 시범에서 본 자리 근처로만 뻗어 상자에 닿지 못함 (붙이기 전 손이 잡는 위치에 가장 가까웠던 거리 평균 5.4cm·최대 11.7cm, 학습 범위 안에서는 평균 0.9cm). 스크립트는 상자의 실제 위치로 손을 보내므로 94%
+- 행동 묶음 50스텝 중 몇 스텝을 실행하고 다시 요청할지 (학습 범위 안, 100개씩)
+  | 실행 스텝 수 | 짧은 학습(2000): 성공 / 시간 | 본 학습(8000): 성공 / 시간 | 요청 횟수 (100개 평가) | 붙이기 전 손 오차 (본 학습, 평균 / 최대) | 들고 있는 동안 손과 옆면 사이 최소 틈 (본 학습, 평균 / 최소) |
+  |---|---|---|---|---|---|
+  | 10 (0.2초마다) | 100/100 / 3.25초 | 100/100 / 3.43초 | 93 | 0.89 / 3.35cm | 0.29 / −2.23cm |
+  | 25 (0.5초마다) | 100/100 / 3.30초 | 100/100 / 3.48초 | 35 | 0.86 / 2.85cm | 0.44 / −1.38cm |
+  | 50 (1초마다) | 100/100 / 3.39초 | 100/100 / 3.49초 | 16 | 0.88 / 3.18cm | 0.48 / −2.37cm |
+  - 세 가지 모두 성공률이 같아 차이를 가르지 못함. 요청 횟수와 시간이 중간인 **25스텝**을 기본으로 씀
+  - 본 학습으로 붙이기 전 손 오차가 줄었음: 짧은 학습 평균 1.1~1.3cm·최대 3.4~3.9cm → 본 학습 평균 0.9cm·최대 2.9~3.4cm (붙이는 조건 4cm)
+  - VLA 가 들고 있는 동안 손이 상자 옆면 안쪽으로 측정상 최대 1.4~2.4cm 들어간 경우가 있음 (스크립트는 6단계 측정에서 최대 0.5cm). 측정은 경계 상자 기준
+- **1차 판정: 통과** (학습 범위 안 100%, 기준 80%. 넘어짐 0)
+
+#### 1차 영상
+- 녹화: `python -u scripts\vla_pick_eval.py --headless --mode vla --ckpt <체크포인트>\pretrained_model --episodes 1 --num_envs 1 --seed 4242 --keep_steps 170 --video --view side --name vla1_side --kit_args "--/app/vulkan=false --/renderer/active=d3d12"` (앞모습은 `--view front`, 스크립트는 `--mode script`). 같은 시드라 같은 장면
+  - 남는 것 (`data\vla_pick\videos\`): 바깥에서 본 영상 `<이름>-step-0.mp4`, 팔을 움직인 구간의 머리 카메라 `<이름>_head.mp4`, 명령·구간 정보 `<이름>_info.json`
+  - `--keep_steps`: VLA 는 성공 판정이 나면 그 환경을 멈추는데, 녹화에서는 든 자세까지 보이도록 그 뒤로도 계속 실행 (평가에서는 0)
+- 편집: `python scripts\make_vla_video.py --dir data\vla_pick\videos --names vla1_side --out portfolio\g1_vla_pick_side.mp4 --gif portfolio\g1_vla_pick_side.gif` — 팔을 움직인 구간의 앞 1.5초부터 뒤 1초까지 자르고, 아래에 명령 문장, 오른쪽 위에 머리 카메라 화면을 넣음. 이름을 두 개 주면 좌우로 붙임
+- portfolio (git 제외)
+  | 파일 | 내용 | 크기 (mp4 / GIF) |
+  |---|---|---|
+  | `g1_vla_pick_side.mp4/.gif` | VLA, 옆모습 (9.5초) | 0.6 / 2.6MB |
+  | `g1_vla_pick_front.mp4/.gif` | VLA, 앞모습 | 0.7 / 3.5MB |
+  | `g1_vla_pick_compare.mp4/.gif` | 스크립트 IK / VLA 나란히, 옆모습 (9.7초) | 0.4 / 1.6MB |
+  | `g1_vla_pick_compare_front.mp4/.gif` | 스크립트 IK / VLA 나란히, 앞모습 | 0.4 / 2.1MB |
+  - GIF 는 720px(비교는 800px)·12fps
+  - 프레임에서 본 것: VLA 가 벌린 자세에서 손을 상자 양옆으로 가져가 붙이고 든 자세까지 올림. 스크립트와 같은 장면에서 거의 같은 동작
+
 ## 미해결 과제
+- 8단계 (VLA 상체 제어)
+  - 시범에 없던 상대 위치에 약함: 로봇이 상자 정면에서 옆으로 6~10cm·비스듬히 6~10° 벗어나 서면 성공 33% (스크립트 94%). 시범이 '걸어가서 선 자리의 오차'만큼만 다양함. 서는 자리를 일부러 흩어 시범을 모으면 나아지는지는 해 보지 않음 (확인 필요)
+  - 잡기는 여전히 '붙이기' (잡기 신호 + 손이 4cm 안). 손가락은 움직이지 않음
+  - VLA 가 맡는 것은 '받침대 앞에 선 뒤 들기까지'뿐. 걷기 목표·내려놓기·옮기기는 스크립트
+  - 행동 묶음 중 실행 스텝 수(10·25·50)는 성공률로 차이를 가르지 못함 (모두 100%). 더 어려운 조건에서의 비교는 하지 않음
+  - 한국어 명령은 바이트 단위 토큰으로 들어가고 VLM 은 학습하지 않음. 1차는 문장이 달라도 할 일이 같아 명령을 이해하는지는 알 수 없음
+  - 시드 하나로 학습·평가. 평가는 시뮬레이션을 멈춘 채 응답을 기다리는 방식이라 실시간 동작(응답 0.3초 동안 로봇이 계속 움직이는 경우)은 확인하지 않음
 - 8단계 준비 (VLA 조사)
   - 로봇에 붙이지 않았음: 시범 데이터가 없고(스크립트로 모을 수 있음), Isaac 쪽 저장·변환·작업자 연결은 설계만 확인
   - Isaac 환경(Python 3.11)에는 LeRobot 을 설치할 수 없어 LeRobot 의 원격 추론·환경 서버를 그대로 쓰지 못함. Isaac Sim 6·Isaac Lab 3 으로 올리면 쓸 수 있다고 문서에 있으나, 올렸을 때 지금 과제·정책이 그대로 도는지는 확인하지 않음 (확인 필요)

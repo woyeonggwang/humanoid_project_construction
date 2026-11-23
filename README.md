@@ -22,6 +22,7 @@ Unitree G1 휴머노이드가 한국어 명령을 듣고 상자를 집어 옮기
 | 5 | 상자 집어 옮기기 | 양팔 IK + 상태 머신 (학습 없음) |
 | 6 | 걷기 정책 v2 | 팔 전체 무작위화, 뒤로 걷기, 어느 박자에서든 멈추기 |
 | 7 | VLM 판단 층 | 사진 + 한국어 명령 → 기술 순서 JSON |
+| 8 | VLA 상체 제어 | 머리 카메라 사진 + 팔 상태 + 한국어 명령 → 팔 관절 목표값과 잡기 신호 (SmolVLA 미세조정) |
 
 단계별 설계 결정, 결과 표, 시행착오는 [CLAUDE.md](CLAUDE.md) 에 있습니다.
 
@@ -30,6 +31,7 @@ Unitree G1 휴머노이드가 한국어 명령을 듣고 상자를 집어 옮기
 - `humanoid_tasks/g1_carry/` — 과제 설정 (환경, 보상·이벤트, IK, 상자 집어 옮기기 상태 머신, VLM 장면)
 - `scripts/` — 학습·평가·녹화·데이터 생성·데모 실행
 - `vlm/` — VLM 판단 층 (명령 체계, 문장 템플릿, 파인튜닝, 평가, 실행용 작업자)
+- `vla/` — VLA 상체 제어 (시범 데이터 변환, SmolVLA 미세조정, 행동 출력 작업자, 메모리 측정)
 
 ## 실행
 
@@ -51,8 +53,19 @@ python train.py
 python evaluate.py --model Qwen/Qwen3.5-0.8B --adapter outputs/qwen35_08b/lora --name ft_08b
 ```
 
+VLA 상체 제어 (시범 수집·실행은 Isaac 환경에서, 변환·학습은 LeRobot 을 설치한 별도 환경에서):
+
+```
+python scripts\collect_vla_demos.py --headless --episodes 208 --num_envs 16 --out data\vla_pick\raw_v1
+python vla\convert_to_lerobot.py --raw data\vla_pick\raw_v1 --root data\vla_pick\lerobot_v1
+python vla\train.py --dataset_root data\vla_pick\lerobot_v1 --steps 8000 --batch 32 --out data\vla_pick\train\main_8k
+python scripts\vla_pick_eval.py --headless --mode vla --ckpt data\vla_pick\train\main_8k\checkpoints\last\pretrained_model
+```
+
 ## 모델과 데이터
 
 - **VLM**: [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) 를 LoRA 로 파인튜닝해 씁니다. 모델 카드에 표기된 라이선스는 Apache License 2.0 입니다. 모델 가중치와 학습한 어댑터는 이 저장소에 들어 있지 않습니다.
 - **VLM 학습 데이터**: 모두 이 프로젝트에서 만든 합성 데이터입니다. 사진은 Isaac Lab 장면(받침대 3개, 색 상자)을 로봇 머리 카메라로 찍은 것이고, 명령 문장과 정답 JSON 은 `vlm/templates.py` 의 템플릿이 장면의 실제 상태로부터 자동으로 만듭니다. 외부 데이터셋은 쓰지 않았습니다. 사진은 용량이 커서 저장소에 올리지 않고, `scripts/make_vlm_data.py` 를 같은 시드로 실행하면 같은 장면·문장으로 다시 만들 수 있습니다.
+- **VLA**: [SmolVLA](https://huggingface.co/lerobot/smolvla_base) (`lerobot/smolvla_base`, 4.5억 파라미터)를 [LeRobot](https://github.com/huggingface/lerobot) 으로 미세조정해 씁니다. 모델 카드에 표기된 라이선스는 Apache License 2.0 이고, 바탕이 되는 VLM(SmolVLM2-500M-Video-Instruct)도 Apache License 2.0 입니다. LeRobot 코드도 Apache License 2.0 입니다. 가중치와 학습한 체크포인트는 이 저장소에 들어 있지 않습니다.
+- **VLA 시범 데이터**: 이 프로젝트의 상자 집기 스크립트(상태 머신 + IK)를 Isaac Lab 에서 돌려 자동으로 모은 합성 데이터입니다 (머리 카메라 영상, 팔 관절 위치·목표값, 잡기 신호, 한국어 명령). 외부 데이터셋은 쓰지 않았고, 용량이 커서 저장소에 올리지 않습니다.
 - **로봇 모델**: Isaac Lab 에 들어 있는 Unitree G1 설정을 상속해 씁니다.

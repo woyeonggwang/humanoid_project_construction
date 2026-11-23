@@ -23,3 +23,6 @@ vlm/data_small/
 vlm/outputs/
 vlm/unsloth_compiled_cache/
 vlm/results/small_*
+
+# ── VLA 시범 데이터·학습 결과 (용량이 커서 올리지 않음. 생성 명령은 CLAUDE.md) ──
+data/

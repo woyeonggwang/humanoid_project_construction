@@ -101,7 +101,7 @@ class PickPlaceMachine:
             env: ManagerBasedRLEnv (unwrapped).
             legacy: 5단계 정책용 보정을 쓸지 (모듈 설명 참고).
             grasp_gap: 상자 옆면에서 palm 원점까지의 거리 (m).
-            until: "full" 또는 "lift" (들어 올린 뒤 2초 유지하고 끝).
+            until: "full", "lift"(들어 올린 뒤 2초 유지하고 끝) 또는 "stand"(상자 앞에 멈춰 선 데서 끝. 팔은 벌린 자세).
         """
         self.env = env
         self.robot = env.scene["robot"]
@@ -112,6 +112,7 @@ class PickPlaceMachine:
         self.until = until
         self.debug = debug
         self.grasp_y = BOX_SIZE[1] / 2 + grasp_gap
+        self.box_size = BOX_SIZE  # 지금 다루는 상자의 크기 (set_grasp_geometry 로 바꿈)
         self.ik = DualArmIK(self.robot)
         self.torso = TorsoFrame(self.robot)
         self.palm_ids = self.ik.body_ids
@@ -135,9 +136,11 @@ class PickPlaceMachine:
         self.arm_t, self.arm_T = z(n, dtype=torch.long), torch.ones(n, dtype=torch.long, device=dev)
         self.arm_busy, self.arm_hold, self.arm_world = z(n, dtype=torch.bool), z(n, dtype=torch.bool), z(n, dtype=torch.bool)
         self.move_done = z(n, dtype=torch.bool)
+        # 잡는 위치: 상자 좌표에서 본 양손(palm 원점) 자리 (N, 2, 3). 기본은 좌우 대칭
+        self.grasp_off = torch.tensor([[GRASP_X, self.grasp_y, GRASP_Z], [GRASP_X, -self.grasp_y, GRASP_Z]], device=dev).repeat(n, 1, 1)
         # 붙이기
         self.box = None
-        self.box_mass = 0.0
+        self.box_mass = z(n)  # 환경별 상자 질량 (start 에서 읽음)
         self.attached = z(n, dtype=torch.bool)
         self.att_off, self.att_yaw = z(n, 3), z(n)
         self.att_floor = torch.full((n,), -1.0e9, device=dev)
@@ -180,7 +183,7 @@ class PickPlaceMachine:
         m = torch.ones(self.n, dtype=torch.bool, device=self.device) if mask is None else mask
         self.walk_only = False
         self.box = box
-        self.box_mass = float(box.root_physx_view.get_masses()[0, 0])
+        self.box_mass = box.root_physx_view.get_masses()[:, 0].to(self.device).clone()
         self.src_xy[m], self.src_yaw[m], self.dst_xy[m], self.dst_yaw[m] = src_xy[m], src_yaw[m], dst_xy[m], dst_yaw[m]
         dir_a = torch.stack([torch.cos(src_yaw), torch.sin(src_yaw)], dim=1)
         dir_b = torch.stack([torch.cos(dst_yaw), torch.sin(dst_yaw)], dim=1)
@@ -224,6 +227,27 @@ class PickPlaceMachine:
         self.j_move[m] = True
         self.arm_busy[m], self.arm_hold[m], self.arm_world[m] = False, False, False
 
+    def reset(self):
+        """모든 환경을 처음 상태(대기)로: 붙은 상자를 떼고, 팔 목표값·기록·상태를 비운다. env.reset() 직후에 부른다."""
+        if self.box is not None and bool(self.attached.any()):
+            self._detach(self.attached.clone())
+        self.state[:] = S_IDLE
+        self.t_state[:] = 0
+        self.in_tol_count[:] = 0
+        self.near_mode[:] = False
+        self.fail_state[:] = -1
+        self.fell[:] = False
+        self.fall_info = {}
+        self.reapproach_a[:], self.reapproach_b[:] = 0, 0
+        self.arm_busy[:], self.arm_hold[:], self.arm_world[:], self.j_move[:] = False, False, False, False
+        self.move_done[:] = False
+        self.att_floor[:] = -1.0e9
+        self.box_prev_valid[:] = False
+        self.box_dev_air[:], self.box_dev_table[:], self.pick_tilt_max[:] = 0.0, 0.0, 0.0
+        for v in self.rec.values():
+            v[:] = float("nan")
+        self.ik.reset()
+
     # ------------------------------------------------------------------ 도우미
     def _sym(self, x: float, y: float, z: float) -> torch.Tensor:
         return torch.tensor([[x, y, z], [x, -y, z]], device=self.device)
@@ -243,18 +267,27 @@ class PickPlaceMachine:
     def tilt(self) -> torch.Tensor:
         return torch.acos(torch.clamp(-self.robot.data.projected_gravity_b[:, 2], -1.0, 1.0)) * RAD2DEG
 
+    def set_grasp_geometry(self, box_size, gap_left, gap_right):
+        """다른 크기의 상자나 좌우가 다른 손 간격을 쓸 때: 상자 크기 (앞뒤, 좌우, 높이)와 손별 '옆면에서 palm 원점까지 거리' (숫자 또는 (N,))."""
+        self.box_size = tuple(box_size)
+        self.grasp_off[:, 0, 1] = self.box_size[1] / 2 + torch.as_tensor(gap_left, device=self.device)
+        self.grasp_off[:, 1, 1] = -(self.box_size[1] / 2 + torch.as_tensor(gap_right, device=self.device))
+
+    def grasp_points_of(self, box_pos: torch.Tensor, box_yaw: torch.Tensor, grasp_off: torch.Tensor) -> torch.Tensor:
+        """상자 위치 (N, 3)·방향 (N,) 과 상자 좌표의 손 자리 (N, 2, 3) → 양손 잡는 위치 (N, 2, 3 월드)."""
+        return box_pos[:, None, :] + rot_z(box_yaw[:, None].expand(-1, 2), grasp_off)
+
     def box_grasp_points(self) -> torch.Tensor:
         """상자의 지금 위치·방향 기준 양손 잡는 위치 (N, 2, 3 월드)."""
-        yaw = yaw_of(self.box.data.root_quat_w)[:, None].expand(-1, 2)
-        pts = self._sym(GRASP_X, self.grasp_y, GRASP_Z)
-        return self.box.data.root_pos_w[:, None, :] + rot_z(yaw, pts[None].expand(self.n, -1, -1))
+        return self.grasp_points_of(self.box.data.root_pos_w, yaw_of(self.box.data.root_quat_w), self.grasp_off)
 
-    def _set_palm_extra_mass(self, env_ids: torch.Tensor, extra: float):
-        """손(palm) 질량을 기본값 + extra 로. 관성은 질량 비율만큼 (원본 randomize_rigid_body_mass 와 같은 방식)."""
+    def _set_palm_extra_mass(self, env_ids: torch.Tensor, extra):
+        """손(palm) 질량을 기본값 + extra 로 (extra: 숫자 하나 또는 환경별 값). 관성은 질량 비율만큼 (원본 randomize_rigid_body_mass 와 같은 방식)."""
         ids = env_ids.cpu()
         palm = torch.tensor(self.palm_ids)
         view = self.robot.root_physx_view
         masses = view.get_masses().clone()
+        extra = torch.as_tensor(extra, dtype=masses.dtype).cpu().reshape(-1, 1) if torch.is_tensor(extra) else extra
         masses[ids[:, None], palm] = self.default_mass[ids[:, None], palm] + extra
         view.set_masses(masses, ids)
         inertias = view.get_inertias().clone()
@@ -265,13 +298,15 @@ class PickPlaceMachine:
     def _update_gravity_cancel(self):
         """붙어 있는 상자에는 중력과 같은 크기의 위쪽 힘을 걸어 둔다 (무게는 손 질량으로 대신하므로)."""
         forces = torch.zeros(self.n, 1, 3, device=self.device)
-        forces[self.attached, 0, 2] = self.box_mass * G
+        forces[self.attached, 0, 2] = self.box_mass[self.attached] * G
         self.box.set_external_force_and_torque(forces, torch.zeros(self.n, 1, 3, device=self.device), is_global=True)
 
     HAND_LINKS = ("palm", "zero", "one", "two", "three", "four", "five", "six")  # 손바닥, 엄지 3마디, 나머지 손가락
 
-    def hand_box_clearance(self) -> torch.Tensor:
+    def hand_box_clearance(self, box_pos: torch.Tensor | None = None, box_yaw: torch.Tensor | None = None) -> torch.Tensor:
         """손(손바닥·손가락 링크의 형상)과 상자 옆면 사이의 좌우 틈 (N,) m. 양손 중 작은 값, 음수 = 상자 안으로 들어감.
+
+        box_pos·box_yaw 를 주면 그 자리의 (같은 크기) 상자와의 틈을 잰다. 없으면 지금 다루는 상자.
 
         링크마다 형상의 경계 상자(링크 좌표)를 한 번 읽어 3×3×3 점으로 나누고, 지금 자세로 옮겨 상자 좌표에서 본다.
         상자의 앞뒤·높이 범위 안에 있는 점만 보고 |좌우 위치| − 상자 폭의 절반 을 잰다 (경계 상자라 실제 형상보다 조금 크게 잡힘).
@@ -294,14 +329,16 @@ class PickPlaceMachine:
                     self._hand_pts.append(torch.tensor([[x, y, z] for x in axes[0] for y in axes[1] for z in axes[2]], device=self.device))
                     self._hand_ids.append(self.robot.body_names.index(name))
         clear = torch.full((self.n,), float("inf"), device=self.device)
-        box_pos, box_yaw = self.box.data.root_pos_w, yaw_of(self.box.data.root_quat_w)
+        if box_pos is None:
+            box_pos, box_yaw = self.box.data.root_pos_w, yaw_of(self.box.data.root_quat_w)
+        size = self.box_size
         for pts, bid in zip(self._hand_pts, self._hand_ids):
             k = pts.shape[0]
             quat = self.robot.data.body_quat_w[:, bid][:, None, :].expand(-1, k, -1).reshape(-1, 4)
             w = self.robot.data.body_pos_w[:, bid][:, None, :] + quat_apply(quat, pts[None].expand(self.n, -1, -1).reshape(-1, 3)).reshape(self.n, k, 3)
             rel = rot_z(-box_yaw[:, None].expand(-1, k), w - box_pos[:, None, :])
-            near = (rel[..., 0].abs() < BOX_SIZE[0] / 2) & (rel[..., 2].abs() < BOX_SIZE[2] / 2)
-            gap = torch.where(near, rel[..., 1].abs() - BOX_SIZE[1] / 2, torch.full_like(rel[..., 1], float("inf")))
+            near = (rel[..., 0].abs() < size[0] / 2) & (rel[..., 2].abs() < size[2] / 2)
+            gap = torch.where(near, rel[..., 1].abs() - size[1] / 2, torch.full_like(rel[..., 1], float("inf")))
             clear = torch.minimum(clear, gap.min(dim=1).values)
         return clear
 
@@ -317,7 +354,8 @@ class PickPlaceMachine:
         self.box_prev_valid[mask] = False
         # 손에 무게가 실리면 팔이 1~2cm 처지는데, 상자를 그대로 따라 내리면 받침대에 눌림 → 들어 올릴 때까지 지금 높이를 바닥으로
         self.att_floor[mask] = self.box.data.root_pos_w[mask, 2]
-        self._set_palm_extra_mass(mask.nonzero().flatten(), self.box_mass / 2)
+        ids = mask.nonzero().flatten()
+        self._set_palm_extra_mass(ids, self.box_mass[ids] / 2)
         self._update_gravity_cancel()
 
     def _detach(self, mask: torch.Tensor):
@@ -578,8 +616,12 @@ class PickPlaceMachine:
                 go = still & ~retry
                 self.rec["stance_a_x"][go], self.rec["stance_a_y"][go], self.rec["stance_a_yaw"][go] = ex[go], ey[go], yerr[go]
                 self.rec["stop_turn_a"][go] = wrap(robot.data.heading_w - self.arrive_yaw)[go]
-                self._start_move(go, self.box_grasp_points(), 100, world=True)
-                self._set_state(go, S_CLOSE)
+                if self.until == "stand":  # 여기서부터는 밖에서 팔을 움직임 (VLA 등)
+                    self.arm_hold[go] = False
+                    self._set_state(go, S_DONE)
+                else:
+                    self._start_move(go, self.box_grasp_points(), 100, world=True)
+                    self._set_state(go, S_CLOSE)
 
         # 손 뻗기 (빈손이라 월드 목표를 계속 따라감) → 손 위치 맞추기 → 붙이고 들어 올리기
         m = (st == S_CLOSE) & move_done

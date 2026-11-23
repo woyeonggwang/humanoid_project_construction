@@ -172,3 +172,24 @@ gym.register(
         "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
     },
 )
+
+# 8단계: VLA 로 팔을 움직여 상자 집기 (받침대·색 상자 장면 + 아래를 보는 머리 카메라)
+gym.register(
+    id="Humanoid-G1-VLA-Pick-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "humanoid_tasks.g1_carry.vla_pick_cfg:G1VlaPickEnvCfg",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)
+
+gym.register(
+    id="Humanoid-G1-VLA-Pick2-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "humanoid_tasks.g1_carry.vla_pick_cfg:G1VlaPick2EnvCfg",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)
