@@ -193,3 +193,24 @@ gym.register(
         "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
     },
 )
+
+# 9단계: 내려놓기도 VLA 로 (8단계 2차 장면 + 내려놓을 받침대와 색 판), 전체 연결용 장면 (+ VLM 전용 넓은 카메라)
+gym.register(
+    id="Humanoid-G1-VLA-Place-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "humanoid_tasks.g1_carry.vla_place_cfg:G1VlaPlaceEnvCfg",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)
+
+gym.register(
+    id="Humanoid-G1-VLA-Full-v0",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": "humanoid_tasks.g1_carry.vla_place_cfg:G1VlaFullEnvCfg",
+        "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+    },
+)

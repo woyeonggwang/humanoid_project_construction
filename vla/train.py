@@ -14,6 +14,8 @@ import os
 import sys
 import time
 
+from _win import no_error_dialogs
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -34,6 +36,7 @@ def main():
     ap.add_argument("--resume", action="store_true",
                     help="--out 폴더의 마지막 체크포인트에서 이어서 학습한다. --steps 는 처음부터 센 전체 스텝 수 (나머지 설정은 저장된 것을 그대로 씀)")
     args = ap.parse_args()
+    no_error_dialogs()
 
     import torch
 

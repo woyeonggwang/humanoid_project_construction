@@ -60,9 +60,10 @@ def pair_sentences(rng: random.Random, rounds: list[dict]) -> list[tuple[str, st
     out = [None] * len(rounds)
     picked = {}
     for e, r in enumerate(rounds):
-        if r["pair"] not in picked:
-            picked[r["pair"]] = (rng.randrange(len(COLOR_SENTENCES)), rng.randrange(2))
-        i, j = picked[r["pair"]]
+        key = r["pair"] if r["pair"] is not None else ("single", e)
+        if key not in picked:
+            picked[key] = (rng.randrange(len(COLOR_SENTENCES)), rng.randrange(2))
+        i, j = picked[key]
         out[e] = (color_sentence(r["color"], i, j, "ko"), color_sentence(r["color"], i, j, "en"))
     return out
 
@@ -282,8 +283,11 @@ def _signed(rng: random.Random, spec) -> float:
 
 
 def sample_round2_pairs(rng: random.Random, n: int, pos_range: float = 0.10, yaw_range_deg: float = 15.0,
-                        mass_range: tuple[float, float] = (2.0, 3.0), stance_y=None, stance_yaw_deg=None, deck: list | None = None):
-    """2차 한 묶음을 '같은 장면, 다른 명령'의 쌍으로 뽑는다 (n 은 짝수).
+                        mass_range: tuple[float, float] = (2.0, 3.0), stance_y=None, stance_yaw_deg=None, deck: list | None = None,
+                        n_single: int = 0):
+    """2차 한 묶음을 '같은 장면, 다른 명령'의 쌍으로 뽑는다 (쌍으로 뽑는 환경 수 n - n_single 은 짝수).
+
+    뒤의 n_single 개는 상자가 하나뿐인 장면 ("other" 가 None, "pair" 가 None): 두 상자 중 하나를 이미 옮긴 뒤의 모습.
 
     한 쌍의 두 환경은 받침대 위치·두 상자의 색과 자리·무게·서는 자리가 모두 같고, 집을 상자만 다르다 (하나는 왼쪽, 하나는 오른쪽 상자).
     → 사진·상태만으로는 어느 상자를 집을지 알 수 없고 명령을 봐야만 알 수 있다.
@@ -291,11 +295,20 @@ def sample_round2_pairs(rng: random.Random, n: int, pos_range: float = 0.10, yaw
     stance_y·stance_yaw_deg: 로봇이 서는 자리를 상자 정면에서 옆으로·비스듬히 벗어나게 할 크기 범위 (최소, 최대). 부호는 무작위, 쌍 안에서는 같음.
     돌려주는 값: 환경별 배치 목록 (sample_round2 의 형식 + "color" 집을 색, "stance" (옆 m, 방향 도), "pair" 쌍 번호)
     """
-    assert n % 2 == 0, "쌍으로 뽑으려면 환경 수가 짝수여야 합니다"
+    n_pair = n - n_single
+    assert n_pair % 2 == 0, "쌍으로 뽑으려면 환경 수가 짝수여야 합니다"
     colors = list(BOX_COLORS)
     deck = [] if deck is None else deck
     rounds = [None] * n
-    for k in range(n // 2):
+    for e in range(n_pair, n):
+        rounds[e] = {
+            "stand": (rng.uniform(-pos_range, pos_range), rng.uniform(-pos_range, pos_range), math.radians(rng.uniform(-yaw_range_deg, yaw_range_deg))),
+            "side": rng.choice([1, -1]), "color": rng.choice(colors), "other": None,
+            "offsets": {"target": (rng.uniform(-0.01, 0.01), rng.uniform(-0.01, 0.01), math.radians(rng.uniform(-3.0, 3.0))), "other": (0.0, 0.0, 0.0)},
+            "mass": rng.uniform(*mass_range), "other_mass": 2.5,
+            "stance": (_signed(rng, stance_y), _signed(rng, stance_yaw_deg)), "pair": None,
+        }
+    for k in range(n_pair // 2):
         if not deck:
             deck.extend((a, b) for a in colors for b in colors if a != b)
             rng.shuffle(deck)
@@ -408,6 +421,8 @@ def setup_round2(env, machine: ppm.PickPlaceMachine, color: str | None, rounds: 
         stand_pose[i, :3], stand_yaw[i] = pos, yaw
         stand_pose[i, 3], stand_pose[i, 6] = math.cos(yaw / 2), math.sin(yaw / 2)
         for key, c, side in (("target", r.get("color", color), r["side"]), ("other", r["other"], -r["side"])):
+            if c is None:  # 상자가 하나뿐인 장면
+                continue
             bx, by, byaw = r["offsets"][key]
             lx, ly = bx, side * SLOT_Y + by  # 받침대 좌표
             box_pose[c][i, 0] = pos[0] + math.cos(yaw) * lx - math.sin(yaw) * ly

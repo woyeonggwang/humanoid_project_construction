@@ -38,6 +38,8 @@ parser.add_argument("--color", type=str, default=None, help="1차: 상자의 색
 parser.add_argument("--stance_y", type=str, default=None,
                     help="2차: 로봇이 서는 자리를 상자 정면에서 옆으로 벗어나게 할 크기 범위 '최소,최대' m (부호는 무작위)")
 parser.add_argument("--stance_yaw", type=str, default=None, help="2차: 로봇이 상자를 비스듬히 보게 할 크기 범위 '최소,최대' 도 (부호는 무작위)")
+parser.add_argument("--n_single", type=int, default=0,
+                    help="2차: 한 묶음의 환경 중 이만큼은 상자가 하나뿐인 장면으로 (두 상자 중 하나를 이미 옮긴 뒤의 모습. 쌍이 아니라 하나씩 저장)")
 parser.add_argument("--sync_check", action="store_true", help="사진과 상태의 시점이 맞는지 확인하고 끝")
 parser.add_argument("--two_box", action="store_true",
                     help="2차: 넓은 받침대에 색이 다른 작은 상자 두 개, 명령한 색의 상자를 집음 (과제 Humanoid-G1-VLA-Pick2-v0)")
@@ -161,7 +163,7 @@ with torch.inference_mode():
         # 2차: 상태 머신은 받침대 앞에 서는 데까지만, 그 뒤 팔 동작은 SidePickScript (위로 → 상자 위로 → 내려서 잡기 → 똑바로 들기)
         # 환경을 둘씩 쌍으로 묶는다: 한 쌍은 장면(받침대·두 상자의 색과 자리·무게·서는 자리)이 같고 집을 상자만 다르다.
         # 쌍이 둘 다 성공한 것만 저장한다 (한쪽만 남으면 사진만 보고 어느 상자인지 맞힐 단서가 생김 — CLAUDE.md 8단계 2차 시행착오)
-        assert N % 2 == 0, "--two_box 는 환경 수가 짝수여야 합니다"
+        assert (N - args_cli.n_single) % 2 == 0, "--two_box 는 쌍으로 뽑는 환경 수(num_envs - n_single)가 짝수여야 합니다"
         saved = len(list(out_dir.glob("ep_*.npz")))
         target = saved + args_cli.episodes
         n_round, n_try, n_ok, n_pair_ok, t0 = 0, 0, 0, 0, time.time()
@@ -172,7 +174,8 @@ with torch.inference_mode():
             env.reset()
             machine.reset()
             seq.reset()
-            rounds = vp.sample_round2_pairs(rng, N, args_cli.pos_range, args_cli.yaw_range, mass_range, stance_y, stance_yaw, deck)
+            rounds = vp.sample_round2_pairs(rng, N, args_cli.pos_range, args_cli.yaw_range, mass_range, stance_y, stance_yaw, deck,
+                                            n_single=args_cli.n_single)
             box, stand_xy, stand_yaw, side = vp.setup_round2(u, machine, None, rounds)
             other = vp.OtherBox(u, machine, rounds, side)
             vp.random_lighting(rng)
@@ -232,11 +235,12 @@ with torch.inference_mode():
                 if not bool(ok[e]):
                     key = "넘어짐" if bool(fell[e]) else ("서지 못함" if not bool(started[e]) else f"팔 동작({seq.NAMES[int(seq.phase[e])]})")
                     fail_counts[key] = fail_counts.get(key, 0) + 1
-            for k in range(N // 2):
-                pair = [e for e in range(N) if rounds[e]["pair"] == k]
+            groups = [[e for e in range(N) if rounds[e]["pair"] == k] for k in range((N - args_cli.n_single) // 2)]
+            groups += [[e] for e in range(N) if rounds[e]["pair"] is None]  # 상자가 하나뿐인 장면은 하나씩
+            for pair in groups:
                 if not all(bool(ok[e]) for e in pair):
                     continue
-                n_pair_ok += 1
+                n_pair_ok += len(pair) == 2
                 for e in pair:
                     clear_t.append(float(min_clear_t[e]))
                     clear_o.append(float(min_clear_o[e]))
@@ -248,7 +252,7 @@ with torch.inference_mode():
                     side_name = "left" if r["side"] > 0 else "right"
                     meta = {
                         "task": tasks[e][0], "task_en": tasks[e][1], "color": r["color"], "side": side_name, "other_color": r["other"],
-                        "pair": f"{args_cli.seed}-{n_round}-{k}", "stance_offset": [round(r["stance"][0], 4), round(r["stance"][1], 2)],
+                        "pair": f"{args_cli.seed}-{n_round}-{r['pair']}" if r["pair"] is not None else None, "stance_offset": [round(r["stance"][0], 4), round(r["stance"][1], 2)],
                         "box_mass": round(r["mass"], 3), "fps": vp.CONTROL_HZ, "stand_offset": [round(v, 4) for v in r["stand"]],
                         "stance_error": [round(float(machine.rec[kk][e]), 4) for kk in ("stance_a_x", "stance_a_y", "stance_a_yaw")],
                         "grasp_err": round(float(seq.grasp_err[e]), 4), "max_lift": round(float(tracker.max_lift[e]), 4),
@@ -263,10 +267,10 @@ with torch.inference_mode():
                     count_color[r["color"]] = count_color.get(r["color"], 0) + 1
                     count_side[side_name] = count_side.get(side_name, 0) + 1
             lens = [len(b["images"]) for b in buf if b["images"]]
-            print(f"[collect] 묶음 {n_round}: 성공 {int(ok.sum())}/{N}, 둘 다 성공한 쌍 누적 {n_pair_ok}/{n_round * N // 2}, 저장 {saved}/{target}, "
+            print(f"[collect] 묶음 {n_round}: 성공 {int(ok.sum())}/{N}, 둘 다 성공한 쌍 누적 {n_pair_ok}/{n_round * (N - args_cli.n_single) // 2}, 저장 {saved}/{target}, "
                   f"에피소드 길이 {min(lens) if lens else 0}~{max(lens) if lens else 0} 스텝, {time.time() - t0:.0f}초", flush=True)
         print(f"\n========== 시범 수집 (2차, 상자 두 개, 쌍): 저장 {saved}개 ({out_dir}), 시도 {n_try}개 중 성공 {n_ok}개, "
-              f"둘 다 성공한 쌍 {n_pair_ok}/{n_try // 2}, 묶음 {n_round}개, {time.time() - t0:.0f}초 ==========")
+              f"둘 다 성공한 쌍 {n_pair_ok}/{n_round * (N - args_cli.n_single) // 2}, 묶음 {n_round}개, {time.time() - t0:.0f}초 ==========")
         print("이번에 저장한 것 — 집을 색: " + ", ".join(f"{k} {v}" for k, v in sorted(count_color.items()))
               + " | 자리: " + ", ".join(f"{k} {v}" for k, v in sorted(count_side.items())))
         if fail_counts:

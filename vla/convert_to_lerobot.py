@@ -22,6 +22,8 @@ from pathlib import Path
 
 import numpy as np
 
+from _win import no_error_dialogs
+
 ARM = ["shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow_pitch", "elbow_roll"]
 JOINTS = [f"{side}_{j}" for side in ("left", "right") for j in ARM]
 
@@ -32,18 +34,29 @@ def main():
     ap.add_argument("--root", required=True, help="만들 데이터셋 폴더 (있으면 지우고 다시 만듦)")
     ap.add_argument("--repo_id", default="local/g1_vla_pick", help="데이터셋 이름 (로컬에서만 씀)")
     ap.add_argument("--limit", type=int, default=None, help="앞에서부터 N 에피소드만")
+    ap.add_argument("--shard", default=None,
+                    help="'i,n': 에피소드를 n 묶음으로 나눈 것 중 i 번째만 변환 (여러 프로세스로 나눠 변환한 뒤 vla/merge_datasets.py 로 합칠 때). 쌍은 같은 묶음에 들어감")
     ap.add_argument("--task_key", default="task", help="원자료 meta 에서 작업 문장으로 쓸 항목 (task = 한국어, task_en = 영어)")
     ap.add_argument("--cross_frames", type=int, default=0,
                     help="0 보다 크면 쌍의 짝에서 앞 K 프레임의 사진·상태를 가져온 짧은 에피소드를 에피소드마다 하나 더 넣는다 (위 설명)")
     ap.add_argument("--cross_len", type=int, default=None, help="--cross_frames 로 만드는 짧은 에피소드의 길이 (기본 K + 50)")
     ap.add_argument("--cross_blend", type=int, default=15, help="K 프레임 직전 몇 프레임 동안 행동을 짝의 것에서 자기 것으로 바꿀지")
     args = ap.parse_args()
+    no_error_dialogs()
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
     files = sorted(f for r in args.raw for f in Path(r).glob("ep_*.npz"))
     if args.limit:
         files = files[: args.limit]
+    if args.shard:
+        i, n = (int(v) for v in args.shard.split(","))
+        keys = {}
+        for f in files:
+            with np.load(f) as d:
+                keys[f] = json.loads(str(d["meta"])).get("pair") or str(f)
+        order = {k: j for j, k in enumerate(sorted(set(keys.values())))}
+        files = [f for f in files if order[keys[f]] % n == i]
     first = np.load(files[0])
     h, w = first["images"].shape[1:3]
     fps = int(json.loads(str(first["meta"]))["fps"])
@@ -62,7 +75,9 @@ def main():
         by_pair = {}
         for f in files:
             with np.load(f) as d:
-                by_pair.setdefault(json.loads(str(d["meta"]))["pair"], []).append(f)
+                pair = json.loads(str(d["meta"])).get("pair")
+            if pair is not None:  # 쌍이 아닌 에피소드(상자·빈 판이 하나뿐인 장면)는 그대로만 넣음
+                by_pair.setdefault(pair, []).append(f)
         for v in by_pair.values():
             if len(v) == 2:
                 partner[v[0]], partner[v[1]] = v[1], v[0]

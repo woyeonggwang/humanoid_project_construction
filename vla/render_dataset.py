@@ -14,6 +14,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from _win import no_error_dialogs
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -23,6 +25,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--raw", default=None, help="비교할 원자료 폴더 (에피소드 번호가 파일 번호와 같을 때)")
     args = ap.parse_args()
+    no_error_dialogs()
 
     from lerobot.datasets.lerobot_dataset import LeRobotDataset
 

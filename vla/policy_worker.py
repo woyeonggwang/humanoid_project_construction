@@ -15,6 +15,8 @@ import json
 import sys
 import time
 
+from _win import no_error_dialogs
+
 MARK = "@@VLA@@"
 
 
@@ -28,6 +30,7 @@ def main():
     ap.add_argument("--ckpt", required=True, help="체크포인트의 pretrained_model 폴더")
     ap.add_argument("--image_key", default="observation.images.head")
     args = ap.parse_args()
+    no_error_dialogs()
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
 

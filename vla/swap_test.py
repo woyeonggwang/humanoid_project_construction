@@ -16,6 +16,8 @@ import json
 import numpy as np
 import torch
 
+from _win import no_error_dialogs
+
 # 색 낱말 (humanoid_tasks/g1_carry/vla_pick.py 의 COLOR_WORDS 와 같음. 그 파일은 Isaac 을 import 하므로 여기서 불러올 수 없음)
 COLOR_WORDS = {"red": ["빨간색", "빨간"], "blue": ["파란색", "파란"], "green": ["초록색", "초록"], "yellow": ["노란색", "노란"]}
 
@@ -37,16 +39,21 @@ def main():
     ap.add_argument("--raw", required=True, help="시범 원자료 폴더 (학습에 쓰지 않은 것을 권장)")
     ap.add_argument("--lang", choices=["ko", "en"], default="ko")
     ap.add_argument("--n", type=int, default=48, help="쓸 에피소드 수")
-    ap.add_argument("--step", type=int, default=45, help="관측을 뽑을 시점 (스텝)")
+    ap.add_argument("--step", type=int, default=45, help="관측을 뽑을 시점 (스텝). 집기 45, 내려놓기 35 (좌우로 갈라지기 직전)")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
+    no_error_dialogs()
 
     from lerobot.policies.factory import make_pre_post_processors
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
     policy = SmolVLAPolicy.from_pretrained(args.ckpt).to("cuda").eval()
     pre, post = make_pre_post_processors(policy.config, pretrained_path=args.ckpt)
-    files = sorted(glob.glob(args.raw + "/ep_*.npz"))
+    files = []
+    for f in sorted(glob.glob(args.raw + "/ep_*.npz")):  # 쌍으로 모은 에피소드만 (하나뿐인 장면은 바꿀 명령이 없음)
+        with np.load(f) as d:
+            if json.loads(str(d["meta"])).get("pair") is not None:
+                files.append(f)
     pick = np.random.default_rng(args.seed).choice(len(files), min(args.n, len(files)), replace=False)
 
     def run(img, state, task, seed):

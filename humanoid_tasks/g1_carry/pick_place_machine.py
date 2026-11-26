@@ -197,10 +197,15 @@ class PickPlaceMachine:
         self._set_state(m, S_OPEN)
         self._start_move(m, self._pelvis_to_world(OPEN_POSE[0], OPEN_POSE[1], OPEN_POSE[2]), 75)
 
-    def start_walk(self, target_xy: torch.Tensor, target_yaw: torch.Tensor, obstacles: torch.Tensor | None = None):
-        """go_to 기술: 물건 없이 목표 받침대 앞까지 걸어가 멈춘다 (상태는 B 쪽 걷기를 그대로 씀)."""
+    def start_walk(self, target_xy: torch.Tensor, target_yaw: torch.Tensor, obstacles: torch.Tensor | None = None,
+                   keep_box: bool = False):
+        """go_to 기술: 목표 받침대 앞까지 걸어가 멈춘다 (상태는 B 쪽 걷기를 그대로 씀).
+
+        keep_box=True 면 지금 붙어 있는 상자를 든 채 걷는다 (take_box 로 붙였거나 밖에서 집은 뒤). 팔 관절 목표는 그대로 둔다.
+        """
         m = torch.ones(self.n, dtype=torch.bool, device=self.device)
-        self.box = None
+        if not keep_box:
+            self.box = None
         self.dst_xy[:], self.dst_yaw[:] = target_xy, target_yaw
         dir_b = torch.stack([torch.cos(target_yaw), torch.sin(target_yaw)], dim=1)
         self.stance_b_xy[:] = target_xy - STANCE_DIST * dir_b
@@ -213,6 +218,14 @@ class PickPlaceMachine:
         self._enter_backoff(m, S_BACK_B, S_WALK_B)
 
     walk_only = False
+
+    def take_box(self, box, mask: torch.Tensor | None = None):
+        """상자를 지금 자리에서 손에 붙인다 (집는 과정 없이 '든 상태'로 시작할 때). 상자는 미리 양손 사이에 놓아 둔다."""
+        m = torch.ones(self.n, dtype=torch.bool, device=self.device) if mask is None else mask
+        self.box = box
+        self.box_mass = box.root_physx_view.get_masses()[:, 0].to(self.device).clone()
+        self._attach(m)
+        self.att_floor[m] = -1.0e9
 
     def arms_to_carry(self, mask: torch.Tensor | None = None, steps: int = 75):
         """mask 환경(기본: 전부)의 팔 관절 목표값을 짐 든 자세(기본 자세)로 부드럽게 되돌린다 (IK 없이 관절 공간에서 steps 스텝).
