@@ -31,7 +31,7 @@ Unitree G1 휴머노이드가 한국어 명령을 듣고 상자를 집어 옮기
 - `humanoid_tasks/g1_carry/` — 과제 설정 (환경, 보상·이벤트, IK, 상자 집어 옮기기 상태 머신, VLM 장면)
 - `scripts/` — 학습·평가·녹화·데이터 생성·데모 실행
 - `vlm/` — VLM 판단 층 (명령 체계, 문장 템플릿, 파인튜닝, 평가, 실행용 작업자)
-- `vla/` — VLA 상체 제어 (시범 데이터 변환, SmolVLA 미세조정, 행동 출력 작업자, 메모리 측정)
+- `vla/` — VLA 상체 제어 (시범 데이터 변환, SmolVLA 미세조정, 행동 출력 작업자, 명령 바꿔치기 시험, 메모리 측정)
 
 ## 실행
 
@@ -60,6 +60,16 @@ python scripts\collect_vla_demos.py --headless --episodes 208 --num_envs 16 --ou
 python vla\convert_to_lerobot.py --raw data\vla_pick\raw_v1 --root data\vla_pick\lerobot_v1
 python vla\train.py --dataset_root data\vla_pick\lerobot_v1 --steps 8000 --batch 32 --out data\vla_pick\train\main_8k
 python scripts\vla_pick_eval.py --headless --mode vla --ckpt data\vla_pick\train\main_8k\checkpoints\last\pretrained_model
+```
+
+색이 다른 상자 두 개 중 명령한 색을 집기 (같은 장면에 명령만 다른 쌍으로 시범을 모음):
+
+```
+python scripts\collect_vla_demos.py --two_box --headless --episodes 408 --num_envs 24 --stance_y 0,0.06 --stance_yaw 0,8 --out data\vla_pick\raw3_v1
+python vla\convert_to_lerobot.py --raw data\vla_pick\raw3_v1 --root data\vla_pick\lerobot3x_ko --repo_id local/g1_vla_pick3x_ko --cross_frames 56
+python vla\train.py --dataset_root data\vla_pick\lerobot3x_ko --repo_id local/g1_vla_pick3x_ko --steps 8000 --batch 32 --train_vlm --out data\vla_pick\train\cross_ko_vlm_8k
+python vla\swap_test.py --ckpt data\vla_pick\train\cross_ko_vlm_8k\checkpoints\last\pretrained_model --raw data\vla_pick\raw3_val
+python scripts\vla_pick_eval.py --headless --two_box --pairs --mode vla --n_action_steps 50 --episodes 96 --num_envs 24 --ckpt data\vla_pick\train\cross_ko_vlm_8k\checkpoints\last\pretrained_model
 ```
 
 ## 모델과 데이터

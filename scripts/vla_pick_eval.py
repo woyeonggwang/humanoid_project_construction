@@ -6,6 +6,8 @@
   - --mode script: 수집 때와 같은 스크립트 IK (비교 기준)
 - 성공: 상자가 붙은 채 처음 높이보다 5cm 넘게 들려 0.5초 유지 (두 방식 공통, vla_pick.LiftTracker). 제한 시간 --max_time 초
 - 실패 단계 (vla): 못 닿음 / 잡기 신호 시점 틀림 / 들다 놓침 / 붙였지만 못 듦 / 넘어짐
+- --two_box --pairs (2차): 환경을 둘씩 쌍으로 묶어, 한 쌍은 장면이 같고 명령의 색만 다르게 한다 (명령 바꿔치기 시험).
+  명령대로 서로 다른 상자를 고른 쌍의 비율이 '명령을 쓰는지' 를 보여 준다. --lang en 이면 같은 뜻의 영어 명령을 준다
 
 VLA 를 띄울 파이썬은 --vla_python 또는 환경 변수 VLA_PYTHON 으로 준다.
 예) python -u scripts\\vla_pick_eval.py --headless --mode vla --ckpt <체크포인트>/pretrained_model --episodes 100 --num_envs 25 --kit_args "--/app/vulkan=false --/renderer/active=d3d12"
@@ -36,6 +38,9 @@ parser.add_argument("--mass_range", type=str, default="2.0,3.0")
 parser.add_argument("--color", type=str, default=None, help="상자 색을 하나로 고정. 'cycle' 이면 묶음마다 red, blue, green, yellow 를 차례로 (기본: 묶음마다 무작위)")
 parser.add_argument("--two_box", action="store_true",
                     help="2차: 넓은 받침대에 색이 다른 작은 상자 두 개, 명령한 색의 상자를 집음 (과제 Humanoid-G1-VLA-Pick2-v0)")
+parser.add_argument("--pairs", action="store_true",
+                    help="2차: 환경을 둘씩 쌍으로 (같은 장면, 명령의 색만 다름). 집을 색은 환경마다 다르고 색·자리가 고르게 나옴. 환경 수는 짝수")
+parser.add_argument("--lang", choices=["ko", "en"], default="ko", help="2차: 명령 문장의 언어")
 parser.add_argument("--side", choices=["left", "right"], default=None, help="2차: 집을 상자의 자리를 고정 (녹화용)")
 parser.add_argument("--other_color", type=str, default=None, help="2차: 다른 상자의 색을 고정 (녹화용)")
 parser.add_argument("--stance_y", type=str, default=None,
@@ -81,6 +86,10 @@ N = args_cli.num_envs
 if args_cli.two_box and args_cli.task == "Humanoid-G1-VLA-Pick-v0":
     args_cli.task = "Humanoid-G1-VLA-Pick2-v0"
 mass_range = tuple(float(v) for v in args_cli.mass_range.split(","))
+if args_cli.pairs and (not args_cli.two_box or N % 2):
+    raise SystemExit("--pairs 는 --two_box 와 함께, 환경 수를 짝수로 써야 합니다")
+stance_y = tuple(float(v) for v in args_cli.stance_y.split(",")) if args_cli.stance_y else None
+stance_yaw = tuple(float(v) for v in args_cli.stance_yaw.split(",")) if args_cli.stance_yaw else None
 env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=N)
 env_cfg.seed = args_cli.seed
 if args_cli.video:
@@ -113,6 +122,7 @@ tracker = vp.LiftTracker(machine)
 executor = vp.VlaArmExecutor(machine)
 cmd_term = u.command_manager.get_term("base_velocity")
 rng = random.Random(args_cli.seed)
+deck = []  # --pairs: (왼쪽 색, 오른쪽 색) 을 고르게 꺼내는 목록
 
 # ---------------------------------------------------------------------------
 # VLA 작업자
@@ -185,14 +195,22 @@ with torch.inference_mode():
         machine.reset()
         other, rounds = None, None
         round_color = ("red", "blue", "green", "yellow")[(n_round - 1) % 4] if args_cli.color == "cycle" else args_cli.color
-        if args_cli.two_box:
+        if args_cli.two_box and args_cli.pairs:
+            seq.reset()
+            color = "환경마다"
+            rounds = vp.sample_round2_pairs(rng, N, args_cli.pos_range, args_cli.yaw_range, mass_range, stance_y, stance_yaw, deck)
+            box, stand_xy, stand_yaw, side = vp.setup_round2(u, machine, None, rounds)
+            other = vp.OtherBox(u, machine, rounds, side)
+            masses = [r["mass"] for r in rounds]
+            tasks = [t[args_cli.lang == "en"] for t in vp.pair_sentences(rng, rounds)]
+        elif args_cli.two_box:
             seq.reset()
             color, rounds = vp.sample_round2(rng, N, args_cli.pos_range, args_cli.yaw_range, mass_range, color=round_color,
                                             side={"left": 1, "right": -1, None: None}[args_cli.side], other=args_cli.other_color)
             box, stand_xy, stand_yaw, side = vp.setup_round2(u, machine, color, rounds)
             other = vp.OtherBox(u, machine, rounds, side)
             masses = [r["mass"] for r in rounds]
-            tasks = [vp.task_sentence(rng, color) for _ in range(N)]
+            tasks = [vp.task_sentence(rng, color, args_cli.lang) for _ in range(N)]
         else:
             color, layouts, masses = vp.sample_round(rng, N, args_cli.pos_range, args_cli.yaw_range, mass_range, color=round_color)
             box, stand_xy, stand_yaw = vp.setup_round(u, machine, color, layouts, masses)
@@ -204,17 +222,15 @@ with torch.inference_mode():
             machine.pre_step()
             tick_machine()
         # 서는 자리를 일부러 벗어나게 할 때: 상태 머신에 '옆으로 옮기고 돌린 받침대'를 목표로 준다 (상자는 그대로, 잡는 위치는 실제 상자 기준)
-        aim_xy, aim_yaw = stand_xy.clone(), stand_yaw.clone()
         off_y, off_yaw = [0.0] * N, [0.0] * N
-        if args_cli.stance_y:
-            lo, hi = (float(v) for v in args_cli.stance_y.split(","))
-            off_y = [rng.choice([-1, 1]) * rng.uniform(lo, hi) for _ in range(N)]
-            left = torch.stack([-torch.sin(stand_yaw), torch.cos(stand_yaw)], dim=1)
-            aim_xy = aim_xy + torch.tensor(off_y, device=device)[:, None] * left
-        if args_cli.stance_yaw:
-            lo, hi = (float(v) for v in args_cli.stance_yaw.split(","))
-            off_yaw = [rng.choice([-1, 1]) * rng.uniform(lo, hi) for _ in range(N)]
-            aim_yaw = aim_yaw + torch.deg2rad(torch.tensor(off_yaw, device=device))
+        if args_cli.pairs:  # 쌍 안에서는 서는 자리도 같게 (배치를 뽑을 때 정해 둠)
+            off_y, off_yaw = [r["stance"][0] for r in rounds], [r["stance"][1] for r in rounds]
+        else:
+            if stance_y:
+                off_y = [rng.choice([-1, 1]) * rng.uniform(*stance_y) for _ in range(N)]
+            if stance_yaw:
+                off_yaw = [rng.choice([-1, 1]) * rng.uniform(*stance_yaw) for _ in range(N)]
+        aim_xy, aim_yaw = vp.stance_aim(stand_xy, stand_yaw, off_y, off_yaw)
         machine.start(box, aim_xy, aim_yaw, aim_xy, aim_yaw, obstacles=stand_xy[None])
         fell = torch.zeros(N, dtype=torch.bool, device=device)
         started = torch.zeros(N, dtype=torch.bool, device=device)
@@ -303,7 +319,8 @@ with torch.inference_mode():
                 break
             if not bool(ready[e]):  # 받침대 앞에 서지 못한 환경은 평가에서 뺌 (걷기 쪽의 실패)
                 continue
-            rec = {"success": bool(success[e]), "stage": stage[e], "color": color, "task": tasks[e], "box_mass": round(masses[e], 3),
+            rec = {"success": bool(success[e]), "stage": stage[e], "color": rounds[e].get("color", color) if rounds is not None else color,
+                   "task": tasks[e], "box_mass": round(masses[e], 3),
                    "time_s": round(float(tracker.t_success[e]) * step_dt, 2) if bool(success[e]) else None,
                    "max_lift": round(float(tracker.max_lift[e]), 4),
                    "stance_error": [round(float(machine.rec[kk][e]), 4) for kk in ("stance_a_x", "stance_a_y", "stance_a_yaw")],
@@ -312,6 +329,10 @@ with torch.inference_mode():
                 rec["side"] = "left" if rounds[e]["side"] > 0 else "right"
                 rec["other_color"] = rounds[e]["other"]
                 rec["wrong_box"] = bool(executor.wrong_pick[e]) if args_cli.mode == "vla" else False
+                # 어느 상자를 골랐는지: 집을 상자를 붙였으면 target, 다른 상자의 잡는 자리에서 잡기 신호를 냈으면 other, 아무것도 못 골랐으면 None
+                rec["chosen"] = "other" if rec["wrong_box"] else ("target" if bool(tracker.ever_attached[e]) else None)
+                if args_cli.pairs:
+                    rec["pair"] = f"{n_round}-{rounds[e]['pair']}"
             if args_cli.mode == "vla":
                 rec["min_hand_err"] = round(float(executor.min_err[e]), 4)
                 rec["min_clearance"] = round(float(executor.min_clear[e]), 4) if float(executor.min_clear[e]) < 1.0e8 else None
@@ -336,6 +357,8 @@ for r in records:
 times = [r["time_s"] for r in ok]
 label = f"VLA (행동 묶음 중 {args_cli.n_action_steps}스텝 실행)" if args_cli.mode == "vla" else "스크립트 IK"
 extra = (f", 서는 자리 옆으로 {args_cli.stance_y}m" if args_cli.stance_y else "") + (f", 비스듬히 {args_cli.stance_yaw}°" if args_cli.stance_yaw else "")
+if args_cli.two_box:
+    extra += f", 명령 {'영어' if args_cli.lang == 'en' else '한국어'}" + (", 쌍" if args_cli.pairs else "")
 print(f"\n========== 뻗기 → 잡기 → 들기: {label}, 위치 ±{args_cli.pos_range * 100:.0f}cm·방향 ±{args_cli.yaw_range:.0f}°{extra}, 에피소드 {n}개 ==========")
 print(f"성공: {len(ok)}/{n} ({len(ok) / n:.0%})")
 print("실패 단계: " + (", ".join(f"{k} {v}" for k, v in sorted(stages.items(), key=lambda kv: -kv[1])) if stages else "없음"))
@@ -357,6 +380,24 @@ if args_cli.two_box:
         c[2] += r.get("wrong_box", False)
     print(f"다른 상자를 집은 비율: {wrong}/{n} ({wrong / n:.0%})")
     print("집을 상자가 놓인 쪽별 (성공/전체, 다른 상자): " + ", ".join(f"{k} {v[0]}/{v[1]}, {v[2]}" for k, v in by_side.items()))
+    reached = sum(r["chosen"] is not None for r in records)
+    print(f"어느 상자든 손이 잡는 자리에 닿아 고른 비율: {reached}/{n} ({reached / n:.0%})")
+pair_summary = None
+if args_cli.pairs:
+    by_pair = {}
+    for r in records:
+        by_pair.setdefault(r["pair"], []).append(r)
+    full = [v for v in by_pair.values() if len(v) == 2]
+    both_ok = sum(all(r["success"] for r in v) for v in full)
+    chose = [v for v in full if all(r["chosen"] for r in v)]
+    follow = sum(all(r["chosen"] == "target" for r in v) for v in chose)
+    same = sum(len({r["chosen"] for r in v}) == 2 for v in chose)  # 하나는 집을 상자, 하나는 다른 상자 = 실제로는 같은 상자
+    opposite = sum(all(r["chosen"] == "other" for r in v) for v in chose)
+    pair_summary = {"pairs": len(full), "both_success": both_ok, "both_chose": len(chose), "follow_command": follow, "same_box": same, "both_wrong": opposite}
+    print(f"명령 바꿔치기 (같은 장면에 명령의 색만 다른 쌍 {len(full)}개): 둘 다 성공 {both_ok}/{len(full)}")
+    if chose:
+        print(f"  두 환경 모두 상자를 고른 쌍 {len(chose)}개 중: 명령대로 서로 다른 상자 {follow} ({follow / len(chose):.0%}), "
+              f"명령이 달라도 같은 상자 {same} ({same / len(chose):.0%}), 둘 다 반대 상자 {opposite}")
 if args_cli.mode == "vla":
     lat = [v[0] for v in latencies]
     errs = [r["min_hand_err"] for r in records if r["min_hand_err"] < 1.0e8]
@@ -370,7 +411,7 @@ if args_cli.out:
     os.makedirs(os.path.dirname(os.path.abspath(args_cli.out)), exist_ok=True)
     summary = {"mode": args_cli.mode, "two_box": args_cli.two_box, "n_action_steps": args_cli.n_action_steps, "pos_range": args_cli.pos_range, "yaw_range": args_cli.yaw_range,
                "stance_y": args_cli.stance_y, "stance_yaw": args_cli.stance_yaw, "episodes": n, "success": len(ok), "stages": stages, "time_mean_s": float(np.mean(times)) if times else None,
-               "seed": args_cli.seed, "records": records}
+               "seed": args_cli.seed, "lang": args_cli.lang, "pairs": pair_summary, "records": records}
     with open(args_cli.out, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=1)
     print(f"결과 저장: {args_cli.out}")

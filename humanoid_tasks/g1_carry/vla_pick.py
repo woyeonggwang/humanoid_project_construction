@@ -37,10 +37,34 @@ COLOR_WORDS = {"red": ["빨간", "빨간색"], "blue": ["파란", "파란색"], 
 COLOR_SENTENCES = ["{c} 상자를 집어", "{c} 상자 들어 줘", "{c} 상자를 들어 올려", "{c} 상자를 집어 줘", "{c} 상자 잡아서 들어"]
 
 
-def task_sentence(rng: random.Random, color: str | None = None) -> str:
+# 같은 뜻의 영어 문장 (문장 번호가 한국어와 같음). 한국어 명령과 영어 명령으로 학습한 결과를 비교할 때 씀
+COLOR_SENTENCES_EN = ["pick up the {c} box", "lift the {c} box", "raise the {c} box", "grab the {c} box", "take the {c} box and lift it"]
+
+
+def color_sentence(color: str, i: int, j: int, lang: str = "ko") -> str:
+    """색을 넣은 명령: i 번째 문장 틀, j 번째 색 낱말 (영어는 낱말이 하나라 j 를 쓰지 않음)."""
+    if lang == "en":
+        return COLOR_SENTENCES_EN[i].format(c=color)
+    return COLOR_SENTENCES[i].format(c=COLOR_WORDS[color][j])
+
+
+def task_sentence(rng: random.Random, color: str | None = None, lang: str = "ko") -> str:
+    """명령 문장 하나. 색이 있으면 문장 틀과 색 낱말을 무작위로 고른다 (lang 이 달라도 난수를 같은 만큼 쓰므로 장면이 같게 유지됨)."""
     if color is None:
         return rng.choice(TASK_SENTENCES)
-    return rng.choice(COLOR_SENTENCES).format(c=rng.choice(COLOR_WORDS[color]))
+    return color_sentence(color, rng.randrange(len(COLOR_SENTENCES)), rng.randrange(len(COLOR_WORDS[color])), lang)
+
+
+def pair_sentences(rng: random.Random, rounds: list[dict]) -> list[tuple[str, str]]:
+    """쌍으로 뽑은 묶음의 환경별 (한국어, 영어) 명령. 한 쌍의 두 환경은 문장 틀이 같고 색 낱말만 다르다."""
+    out = [None] * len(rounds)
+    picked = {}
+    for e, r in enumerate(rounds):
+        if r["pair"] not in picked:
+            picked[r["pair"]] = (rng.randrange(len(COLOR_SENTENCES)), rng.randrange(2))
+        i, j = picked[r["pair"]]
+        out[e] = (color_sentence(r["color"], i, j, "ko"), color_sentence(r["color"], i, j, "en"))
+    return out
 
 
 def sample_round(rng: random.Random, n: int, pos_range: float = 0.10, yaw_range_deg: float = 15.0,
@@ -250,8 +274,119 @@ def sample_round2(rng: random.Random, n: int, pos_range: float = 0.10, yaw_range
     return color, rounds
 
 
-def setup_round2(env, machine: ppm.PickPlaceMachine, color: str, rounds: list[dict]):
+def _signed(rng: random.Random, spec) -> float:
+    """spec = (최소, 최대) 크기에서 하나를 뽑아 부호를 무작위로. None 이면 0."""
+    if spec is None:
+        return 0.0
+    return rng.choice([-1, 1]) * rng.uniform(spec[0], spec[1])
+
+
+def sample_round2_pairs(rng: random.Random, n: int, pos_range: float = 0.10, yaw_range_deg: float = 15.0,
+                        mass_range: tuple[float, float] = (2.0, 3.0), stance_y=None, stance_yaw_deg=None, deck: list | None = None):
+    """2차 한 묶음을 '같은 장면, 다른 명령'의 쌍으로 뽑는다 (n 은 짝수).
+
+    한 쌍의 두 환경은 받침대 위치·두 상자의 색과 자리·무게·서는 자리가 모두 같고, 집을 상자만 다르다 (하나는 왼쪽, 하나는 오른쪽 상자).
+    → 사진·상태만으로는 어느 상자를 집을지 알 수 없고 명령을 봐야만 알 수 있다.
+    (왼쪽 색, 오른쪽 색) 12가지를 deck 에서 차례로 꺼내 색과 자리를 고르게 한다 (deck 은 호출 사이에 이어 쓰는 목록, 비면 다시 섞어 채움).
+    stance_y·stance_yaw_deg: 로봇이 서는 자리를 상자 정면에서 옆으로·비스듬히 벗어나게 할 크기 범위 (최소, 최대). 부호는 무작위, 쌍 안에서는 같음.
+    돌려주는 값: 환경별 배치 목록 (sample_round2 의 형식 + "color" 집을 색, "stance" (옆 m, 방향 도), "pair" 쌍 번호)
+    """
+    assert n % 2 == 0, "쌍으로 뽑으려면 환경 수가 짝수여야 합니다"
+    colors = list(BOX_COLORS)
+    deck = [] if deck is None else deck
+    rounds = [None] * n
+    for k in range(n // 2):
+        if not deck:
+            deck.extend((a, b) for a in colors for b in colors if a != b)
+            rng.shuffle(deck)
+        c_left, c_right = deck.pop()
+        stand = (rng.uniform(-pos_range, pos_range), rng.uniform(-pos_range, pos_range), math.radians(rng.uniform(-yaw_range_deg, yaw_range_deg)))
+        off = {s: (rng.uniform(-0.01, 0.01), rng.uniform(-0.01, 0.01), math.radians(rng.uniform(-3.0, 3.0))) for s in (1, -1)}
+        mass = {s: rng.uniform(*mass_range) for s in (1, -1)}
+        stance = (_signed(rng, stance_y), _signed(rng, stance_yaw_deg))
+        first = rng.choice([0, 1])  # 쌍의 두 환경 중 어느 쪽이 왼쪽 상자를 집을지
+        for j, side in ((first, 1), (1 - first, -1)):
+            rounds[2 * k + j] = {
+                "stand": stand, "side": side, "color": c_left if side > 0 else c_right, "other": c_right if side > 0 else c_left,
+                "offsets": {"target": off[side], "other": off[-side]}, "mass": mass[side], "other_mass": mass[-side],
+                "stance": stance, "pair": k,
+            }
+    return rounds
+
+
+def stance_aim(stand_xy: torch.Tensor, stand_yaw: torch.Tensor, off_y, off_yaw_deg):
+    """서는 자리를 벗어나게 할 때 상태 머신에 줄 목표: 받침대를 옆으로 off_y (m) 옮기고 off_yaw_deg (도) 돌린 것. 상자는 그대로 둔다."""
+    dev = stand_xy.device
+    left = torch.stack([-torch.sin(stand_yaw), torch.cos(stand_yaw)], dim=1)
+    aim_xy = stand_xy + torch.as_tensor(off_y, dtype=torch.float, device=dev)[:, None] * left
+    return aim_xy, stand_yaw + torch.deg2rad(torch.as_tensor(off_yaw_deg, dtype=torch.float, device=dev))
+
+
+class BoxGroup:
+    """환경마다 색이 다른 '집을 상자'를 상태 머신에는 상자 하나처럼 보이게 한다.
+
+    상태 머신(pick_place_machine)은 상자 하나(RigidObject)의 위치 읽기·옮기기·힘 걸기만 쓰므로, 그 호출들을 환경별로 맞는 색의 상자에 나눠 보낸다.
+    """
+
+    def __init__(self, env, colors: list[str]):
+        self.device, self.n = env.device, len(colors)
+        self.colors = list(colors)
+        self.boxes = {c: env.scene[f"small_{c}_box"] for c in BOX_COLORS}
+        self.masks = {c: torch.tensor([x == c for x in colors], device=env.device) for c in BOX_COLORS}
+        self.data = self  # 상태 머신은 box.data.root_pos_w·root_quat_w 를 읽음
+        self.root_physx_view = self  # box.root_physx_view.get_masses()
+
+    def _gather(self, name: str) -> torch.Tensor:
+        out = None
+        for c, m in self.masks.items():
+            v = getattr(self.boxes[c].data, name)
+            if out is None:
+                out = v.clone()
+            else:
+                out[m] = v[m]
+        return out
+
+    @property
+    def root_pos_w(self) -> torch.Tensor:
+        return self._gather("root_pos_w")
+
+    @property
+    def root_quat_w(self) -> torch.Tensor:
+        return self._gather("root_quat_w")
+
+    def get_masses(self) -> torch.Tensor:
+        out = None
+        for c, m in self.masks.items():
+            v = self.boxes[c].root_physx_view.get_masses()
+            if out is None:
+                out = v.clone()
+            else:
+                mm = m.to(v.device)
+                out[mm] = v[mm]
+        return out
+
+    def set_external_force_and_torque(self, forces: torch.Tensor, torques: torch.Tensor, is_global: bool = False):
+        for c, m in self.masks.items():
+            w = m[:, None, None].to(forces.dtype)
+            self.boxes[c].set_external_force_and_torque(forces * w, torques * w, is_global=is_global)
+
+    def write_root_pose_to_sim(self, pose: torch.Tensor, env_ids: torch.Tensor):
+        for c, m in self.masks.items():
+            sel = m[env_ids]
+            if bool(sel.any()):
+                self.boxes[c].write_root_pose_to_sim(pose[sel], env_ids=env_ids[sel])
+
+    def write_root_velocity_to_sim(self, vel: torch.Tensor, env_ids: torch.Tensor):
+        for c, m in self.masks.items():
+            sel = m[env_ids]
+            if bool(sel.any()):
+                self.boxes[c].write_root_velocity_to_sim(vel[sel], env_ids=env_ids[sel])
+
+
+def setup_round2(env, machine: ppm.PickPlaceMachine, color: str | None, rounds: list[dict]):
     """2차 배치를 적용한다. 돌려주는 값: (집을 상자, 받침대 중심 (N, 2), 받침대 방향 (N,), 집을 상자가 왼쪽이면 +1 (N,))
+
+    집을 색은 배치의 "color" (환경마다 다를 수 있음), 없으면 인자 color. 집을 상자는 BoxGroup 으로 돌려준다.
 
     1차 장면의 받침대 세 개와 큰 상자들은 멀리 치우고, 넓은 받침대와 작은 상자 두 개(나머지 두 색은 숨김)를 놓는다.
     손 잡는 위치는 바깥 손 GAP_OUTER, 안쪽 손 GAP_INNER 로 정한다.
@@ -272,7 +407,7 @@ def setup_round2(env, machine: ppm.PickPlaceMachine, color: str, rounds: list[di
         pos = origins[i] + torch.tensor([STAND_X + dx, dy, WIDE_STAND_SIZE[2] / 2], device=device)
         stand_pose[i, :3], stand_yaw[i] = pos, yaw
         stand_pose[i, 3], stand_pose[i, 6] = math.cos(yaw / 2), math.sin(yaw / 2)
-        for key, c, side in (("target", color, r["side"]), ("other", r["other"], -r["side"])):
+        for key, c, side in (("target", r.get("color", color), r["side"]), ("other", r["other"], -r["side"])):
             bx, by, byaw = r["offsets"][key]
             lx, ly = bx, side * SLOT_Y + by  # 받침대 좌표
             box_pose[c][i, 0] = pos[0] + math.cos(yaw) * lx - math.sin(yaw) * ly
@@ -290,7 +425,7 @@ def setup_round2(env, machine: ppm.PickPlaceMachine, color: str, rounds: list[di
     side = torch.tensor([r["side"] for r in rounds], device=device, dtype=torch.float)
     outer, inner = torch.full_like(side, GAP_OUTER), torch.full_like(side, GAP_INNER)
     machine.set_grasp_geometry(SMALL_BOX_SIZE, torch.where(side > 0, outer, inner), torch.where(side > 0, inner, outer))
-    return env.scene[f"small_{color}_box"], stand_pose[:, :2].clone(), stand_yaw, side
+    return BoxGroup(env, [r.get("color", color) for r in rounds]), stand_pose[:, :2].clone(), stand_yaw, side
 
 
 class OtherBox:

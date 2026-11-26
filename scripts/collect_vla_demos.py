@@ -2,7 +2,9 @@
 
 - 걷기(받침대 앞까지 가서 멈춤)는 스크립트가 하고 기록하지 않는다. 기록은 손을 뻗기 시작하는 스텝부터, 든 자세에서 1초 머문 데까지
 - 성공한 에피소드만 저장한다 (상자가 붙은 채 5cm 넘게 들려 0.5초 유지, 넘어지지 않음)
-- 무작위화: 받침대·상자 위치 ±10cm·방향 ±15°, 상자 무게 2~3kg, 상자 색(묶음마다), 조명(묶음마다), 명령 문장
+- 무작위화: 받침대·상자 위치 ±10cm·방향 ±15°, 상자 무게 2~3kg, 상자 색(1차: 묶음마다), 조명(묶음마다), 명령 문장
+- --two_box (2차): 환경을 둘씩 쌍으로 묶어, 한 쌍은 장면이 같고 집을 상자(= 명령의 색)만 다르게 한다. 쌍이 둘 다 성공한 것만 저장한다.
+  명령은 한국어(task)와 같은 뜻의 영어(task_en)를 함께 적는다. --stance_y·--stance_yaw 로 로봇이 서는 자리를 흩을 수 있다
 - 저장: <out>/ep_000000.npz (images (T, 256, 256, 3) uint8, state (T, 11), action (T, 11), meta = JSON 문자열)
   관측·행동의 뜻과 시점은 humanoid_tasks/g1_carry/vla_pick.py 설명 참고
 - --sync_check: 사진이 그 스텝의 상태를 보여 주는지 확인 (상자를 순간 이동시킨 스텝의 앞뒤 사진을 비교)
@@ -32,7 +34,10 @@ parser.add_argument("--task", type=str, default="Humanoid-G1-VLA-Pick-v0")
 parser.add_argument("--load_run", type=str, default=".*_loco_v2")
 parser.add_argument("--checkpoint", type=str, default="model_.*.pt")
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--color", type=str, default=None, help="집을 상자의 색을 하나로 고정 (기본: 묶음마다 무작위)")
+parser.add_argument("--color", type=str, default=None, help="1차: 상자의 색을 하나로 고정 (기본: 묶음마다 무작위)")
+parser.add_argument("--stance_y", type=str, default=None,
+                    help="2차: 로봇이 서는 자리를 상자 정면에서 옆으로 벗어나게 할 크기 범위 '최소,최대' m (부호는 무작위)")
+parser.add_argument("--stance_yaw", type=str, default=None, help="2차: 로봇이 상자를 비스듬히 보게 할 크기 범위 '최소,최대' 도 (부호는 무작위)")
 parser.add_argument("--sync_check", action="store_true", help="사진과 상태의 시점이 맞는지 확인하고 끝")
 parser.add_argument("--two_box", action="store_true",
                     help="2차: 넓은 받침대에 색이 다른 작은 상자 두 개, 명령한 색의 상자를 집음 (과제 Humanoid-G1-VLA-Pick2-v0)")
@@ -64,6 +69,8 @@ N = args_cli.num_envs
 if args_cli.two_box and args_cli.task == "Humanoid-G1-VLA-Pick-v0":
     args_cli.task = "Humanoid-G1-VLA-Pick2-v0"
 mass_range = tuple(float(v) for v in args_cli.mass_range.split(","))
+stance_y = tuple(float(v) for v in args_cli.stance_y.split(",")) if args_cli.stance_y else None
+stance_yaw = tuple(float(v) for v in args_cli.stance_yaw.split(",")) if args_cli.stance_yaw else None
 env_cfg = parse_env_cfg(args_cli.task, device=args_cli.device, num_envs=N)
 env_cfg.seed = args_cli.seed
 agent_cfg = load_cfg_from_registry(args_cli.task, "rsl_rl_cfg_entry_point")
@@ -152,17 +159,21 @@ with torch.inference_mode():
         print("[sync] K→K+1 에서만 크게 바뀌면 사진이 한 스텝도 늦지 않는 것 (K+1→K+2 에서 바뀌면 한 스텝 늦음)")
     elif args_cli.two_box:
         # 2차: 상태 머신은 받침대 앞에 서는 데까지만, 그 뒤 팔 동작은 SidePickScript (위로 → 상자 위로 → 내려서 잡기 → 똑바로 들기)
+        # 환경을 둘씩 쌍으로 묶는다: 한 쌍은 장면(받침대·두 상자의 색과 자리·무게·서는 자리)이 같고 집을 상자만 다르다.
+        # 쌍이 둘 다 성공한 것만 저장한다 (한쪽만 남으면 사진만 보고 어느 상자인지 맞힐 단서가 생김 — CLAUDE.md 8단계 2차 시행착오)
+        assert N % 2 == 0, "--two_box 는 환경 수가 짝수여야 합니다"
         saved = len(list(out_dir.glob("ep_*.npz")))
         target = saved + args_cli.episodes
-        n_round, n_try, n_ok, t0 = 0, 0, 0, time.time()
+        n_round, n_try, n_ok, n_pair_ok, t0 = 0, 0, 0, 0, time.time()
         fail_counts, clear_t, clear_o, other_moved = {}, [], [], []
+        count_color, count_side, deck = {}, {}, []
         REC = (seq.UP, seq.OVER, seq.DOWN, seq.GRASP, seq.LIFT)
         while saved < target:
             env.reset()
             machine.reset()
             seq.reset()
-            color, rounds = vp.sample_round2(rng, N, args_cli.pos_range, args_cli.yaw_range, mass_range, color=args_cli.color)
-            box, stand_xy, stand_yaw, side = vp.setup_round2(u, machine, color, rounds)
+            rounds = vp.sample_round2_pairs(rng, N, args_cli.pos_range, args_cli.yaw_range, mass_range, stance_y, stance_yaw, deck)
+            box, stand_xy, stand_yaw, side = vp.setup_round2(u, machine, None, rounds)
             other = vp.OtherBox(u, machine, rounds, side)
             vp.random_lighting(rng)
             cmd_term.vel_command_b[:] = 0.0
@@ -171,8 +182,9 @@ with torch.inference_mode():
                 machine.pre_step()
                 tick()
             other_start = other.pose()[0].clone()
-            machine.start(box, stand_xy, stand_yaw, stand_xy, stand_yaw, obstacles=stand_xy[None])
-            tasks = [vp.task_sentence(rng, color) for _ in range(N)]
+            aim_xy, aim_yaw = vp.stance_aim(stand_xy, stand_yaw, [r["stance"][0] for r in rounds], [r["stance"][1] for r in rounds])
+            machine.start(box, aim_xy, aim_yaw, aim_xy, aim_yaw, obstacles=stand_xy[None])
+            tasks = vp.pair_sentences(rng, rounds)
             buf = [{"images": [], "state": [], "action": []} for _ in range(N)]
             started = torch.zeros(N, dtype=torch.bool, device=device)
             fell = torch.zeros(N, dtype=torch.bool, device=device)
@@ -220,30 +232,43 @@ with torch.inference_mode():
                 if not bool(ok[e]):
                     key = "넘어짐" if bool(fell[e]) else ("서지 못함" if not bool(started[e]) else f"팔 동작({seq.NAMES[int(seq.phase[e])]})")
                     fail_counts[key] = fail_counts.get(key, 0) + 1
+            for k in range(N // 2):
+                pair = [e for e in range(N) if rounds[e]["pair"] == k]
+                if not all(bool(ok[e]) for e in pair):
                     continue
-                clear_t.append(float(min_clear_t[e]))
-                clear_o.append(float(min_clear_o[e]))
-                other_moved.append(float(moved[e]))
+                n_pair_ok += 1
+                for e in pair:
+                    clear_t.append(float(min_clear_t[e]))
+                    clear_o.append(float(min_clear_o[e]))
+                    other_moved.append(float(moved[e]))
                 if saved >= target:
                     continue
-                r = rounds[e]
-                meta = {
-                    "task": tasks[e], "color": color, "side": "left" if r["side"] > 0 else "right", "other_color": r["other"],
-                    "box_mass": round(r["mass"], 3), "fps": vp.CONTROL_HZ, "stand_offset": [round(v, 4) for v in r["stand"]],
-                    "stance_error": [round(float(machine.rec[k][e]), 4) for k in ("stance_a_x", "stance_a_y", "stance_a_yaw")],
-                    "grasp_err": round(float(seq.grasp_err[e]), 4), "max_lift": round(float(tracker.max_lift[e]), 4),
-                    "min_clearance_target": round(float(min_clear_t[e]), 4), "min_clearance_other": round(float(min_clear_o[e]), 4),
-                    "other_box_moved": round(float(moved[e]), 4),
-                    "frames": len(buf[e]["images"]), "seed": args_cli.seed, "round": n_round, "env": e,
-                }
-                np.savez_compressed(out_dir / f"ep_{saved:06d}.npz", images=np.stack(buf[e]["images"]),
-                                    state=np.stack(buf[e]["state"]).astype(np.float32),
-                                    action=np.stack(buf[e]["action"]).astype(np.float32), meta=json.dumps(meta, ensure_ascii=False))
-                saved += 1
+                for e in pair:
+                    r = rounds[e]
+                    side_name = "left" if r["side"] > 0 else "right"
+                    meta = {
+                        "task": tasks[e][0], "task_en": tasks[e][1], "color": r["color"], "side": side_name, "other_color": r["other"],
+                        "pair": f"{args_cli.seed}-{n_round}-{k}", "stance_offset": [round(r["stance"][0], 4), round(r["stance"][1], 2)],
+                        "box_mass": round(r["mass"], 3), "fps": vp.CONTROL_HZ, "stand_offset": [round(v, 4) for v in r["stand"]],
+                        "stance_error": [round(float(machine.rec[kk][e]), 4) for kk in ("stance_a_x", "stance_a_y", "stance_a_yaw")],
+                        "grasp_err": round(float(seq.grasp_err[e]), 4), "max_lift": round(float(tracker.max_lift[e]), 4),
+                        "min_clearance_target": round(float(min_clear_t[e]), 4), "min_clearance_other": round(float(min_clear_o[e]), 4),
+                        "other_box_moved": round(float(moved[e]), 4),
+                        "frames": len(buf[e]["images"]), "seed": args_cli.seed, "round": n_round, "env": e,
+                    }
+                    np.savez_compressed(out_dir / f"ep_{saved:06d}.npz", images=np.stack(buf[e]["images"]),
+                                        state=np.stack(buf[e]["state"]).astype(np.float32),
+                                        action=np.stack(buf[e]["action"]).astype(np.float32), meta=json.dumps(meta, ensure_ascii=False))
+                    saved += 1
+                    count_color[r["color"]] = count_color.get(r["color"], 0) + 1
+                    count_side[side_name] = count_side.get(side_name, 0) + 1
             lens = [len(b["images"]) for b in buf if b["images"]]
-            print(f"[collect] 묶음 {n_round}: 집을 색 {color}, 성공 {int(ok.sum())}/{N}, 저장 {saved}/{target}, "
+            print(f"[collect] 묶음 {n_round}: 성공 {int(ok.sum())}/{N}, 둘 다 성공한 쌍 누적 {n_pair_ok}/{n_round * N // 2}, 저장 {saved}/{target}, "
                   f"에피소드 길이 {min(lens) if lens else 0}~{max(lens) if lens else 0} 스텝, {time.time() - t0:.0f}초", flush=True)
-        print(f"\n========== 시범 수집 (2차, 상자 두 개): 저장 {saved}개 ({out_dir}), 시도 {n_try}개 중 성공 {n_ok}개, 묶음 {n_round}개, {time.time() - t0:.0f}초 ==========")
+        print(f"\n========== 시범 수집 (2차, 상자 두 개, 쌍): 저장 {saved}개 ({out_dir}), 시도 {n_try}개 중 성공 {n_ok}개, "
+              f"둘 다 성공한 쌍 {n_pair_ok}/{n_try // 2}, 묶음 {n_round}개, {time.time() - t0:.0f}초 ==========")
+        print("이번에 저장한 것 — 집을 색: " + ", ".join(f"{k} {v}" for k, v in sorted(count_color.items()))
+              + " | 자리: " + ", ".join(f"{k} {v}" for k, v in sorted(count_side.items())))
         if fail_counts:
             print("실패: " + ", ".join(f"{k} {v}" for k, v in fail_counts.items()))
         clear_t, clear_o = [v for v in clear_t if v < 1.0e8], [v for v in clear_o if v < 1.0e8]

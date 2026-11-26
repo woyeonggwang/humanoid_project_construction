@@ -6,6 +6,7 @@
 
 LeRobot 을 설치한 별도 환경에서 실행한다 (Isaac 환경이 아님). 학습 중에는 Isaac 을 띄우지 않는다.
 예) python vla/train.py --dataset_root data/vla_pick/lerobot_v1 --steps 2000 --batch 32 --out data/vla_pick/train/short_2k
+    python vla/train.py --resume --steps 16000 --save_freq 2000 --out data/vla_pick/train/pairs_ko_vlm_8k   (8000 스텝까지 한 학습을 16000 까지 이어서)
 """
 
 import argparse
@@ -16,7 +17,7 @@ import time
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset_root", required=True, help="LeRobot 데이터셋 폴더")
+    ap.add_argument("--dataset_root", default=None, help="LeRobot 데이터셋 폴더 (--resume 이면 필요 없음)")
     ap.add_argument("--repo_id", default="local/g1_vla_pick")
     ap.add_argument("--rename_map", default='{"observation.images.head": "observation.images.camera1"}')
     ap.add_argument("--policy", default="lerobot/smolvla_base")
@@ -30,6 +31,8 @@ def main():
     ap.add_argument("--cap_gb", type=float, default=10.5)
     ap.add_argument("--train_vlm", action="store_true",
                     help="VLM(언어·사진을 함께 읽는 부분)도 학습. 시각 인코더는 고정. 명령의 낱말을 구분해야 하는 과제용 (메모리가 더 듦)")
+    ap.add_argument("--resume", action="store_true",
+                    help="--out 폴더의 마지막 체크포인트에서 이어서 학습한다. --steps 는 처음부터 센 전체 스텝 수 (나머지 설정은 저장된 것을 그대로 씀)")
     args = ap.parse_args()
 
     import torch
@@ -41,7 +44,14 @@ def main():
         from huggingface_hub import snapshot_download
 
         policy_path = snapshot_download(policy_path)
-    sys.argv = [
+    resume_argv = [
+        "lerobot-train",
+        f"--config_path={os.path.join(args.out, 'checkpoints', 'last', 'pretrained_model', 'train_config.json')}",
+        "--resume=true",
+        f"--steps={args.steps}",
+        f"--save_freq={args.save_freq or args.steps}",
+    ]
+    sys.argv = resume_argv if args.resume else [
         "lerobot-train",
         f"--policy.path={policy_path}",
         f"--dataset.repo_id={args.repo_id}",
@@ -61,7 +71,7 @@ def main():
         "--save_checkpoint=true",
         f"--save_freq={args.save_freq or args.steps}",
     ]
-    print("[train] " + " ".join(a for a in sys.argv if not a.startswith(("--policy.path", "--dataset.root"))), flush=True)
+    print("[train] " + " ".join(a for a in sys.argv if not a.startswith(("--policy.path", "--dataset.root", "--config_path"))), flush=True)
     from lerobot.scripts.lerobot_train import main as train_main
 
     t0 = time.time()
