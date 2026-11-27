@@ -125,3 +125,13 @@ class G1SiteB2EnvCfg(G1VlaFullEnvCfg):
         super().__post_init__()
         use_site_terrain(self, [(sl.PLACEMENTS_A, 0.0, True), (sl.PLACEMENTS_B_VISIBLE, 0.0, True),
                                 (sl.floor_placements("SM_Floor_Concrete"), sl.FLOOR_Z, False)])
+
+
+@configclass
+class G1SiteB3EnvCfg(G1VlaFullEnvCfg):
+    """후보 1 + 흙 바닥 겉모습 (11단계: VLM 학습 사진의 배경을 섞을 때 씀). 물리 바닥은 그대로."""
+
+    def __post_init__(self):
+        super().__post_init__()
+        use_site_terrain(self, [(sl.PLACEMENTS_A, 0.0, True), (sl.PLACEMENTS_B_VISIBLE, 0.0, True),
+                                (sl.floor_placements("SM_Floor_Dirt"), sl.FLOOR_Z, False)])

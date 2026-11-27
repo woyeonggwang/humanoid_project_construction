@@ -90,7 +90,12 @@ def main():
     print("처음 보는 패턴:", summarize([r for r in rows if r.get("heldout")]))
     print("거부 종류별   :", ", ".join(
         f"{e} {acc([r for r in rows if json.loads(r['output']).get('error') == e])}"
-        for e in ("object_not_found", "target_occupied", "unsupported_command")))
+        for e in ("object_not_found", "target_occupied", "unsupported_command", "unknown_target")
+        if any(json.loads(r["output"]).get("error") == e for r in rows)))
+    if any("bg" in r for r in rows):
+        print("배경별        :", ", ".join(f"{b} {acc([r for r in rows if r.get('bg') == b])}" for b in sorted({r.get("bg") for r in rows})))
+        print("배경별 (계획만):", ", ".join(
+            f"{b} {acc([r for r in rows if r.get('bg') == b and not json.loads(r['output']).get('error')])}" for b in sorted({r.get("bg") for r in rows})))
     if args.schema == "stands":
         need_image = {"move", "move_wait", "pick", "goto_box", "move_to_empty", "place"}
         print("사진을 봐야 하는 명령:", acc([r for r in rows if r["template"] in need_image]),
@@ -101,6 +106,12 @@ def main():
                                                 for s in ("stand_L", "stand_C", "stand_R")),
               "| 사진에 없는 상자", acc([r for r in rows if "color" in r and r.get("src") is None]))
     else:
+        if args.schema == "site":
+            print("결과별 (용접)  :", ", ".join(
+                f"{o} {acc([r for r in rows if r['template'] == 'weld' and r.get('outcome') == o])}" for o in ("one", "col", "all", "unknown", "unreachable")))
+            print("결과별 (옮기기 + 용접):", ", ".join(
+                f"{o} {acc([r for r in rows if r['template'] == 'move_weld' and r.get('outcome') == o])}"
+                for o in ("ok", "not_found", "occupied", "unknown", "unreachable")))
         print("결과별 (옮기기·집기): ", ", ".join(
             f"{o} {acc([r for r in rows if r['template'] in ('move1', 'move2', 'pick') and r.get('outcome') == o])}"
             for o in ("ok", "not_found", "occupied")))

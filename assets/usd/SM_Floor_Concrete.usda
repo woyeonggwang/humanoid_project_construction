@@ -76,7 +76,7 @@ def Xform "root" (
                 uniform token info:id = "UsdPreviewSurface"
                 float inputs:clearcoat = 0
                 float inputs:clearcoatRoughness = 0.03
-                color3f inputs:diffuseColor = (0.42, 0.42, 0.4)
+                color3f inputs:diffuseColor = (0.09, 0.09, 0.085)
                 float inputs:ior = 1.5
                 float inputs:metallic = 0
                 float inputs:opacity = 1
@@ -99,7 +99,7 @@ def Xform "root" (
                 uniform token info:id = "UsdPreviewSurface"
                 float inputs:clearcoat = 0
                 float inputs:clearcoatRoughness = 0.03
-                color3f inputs:diffuseColor = (0.22, 0.22, 0.21)
+                color3f inputs:diffuseColor = (0.05, 0.05, 0.048)
                 float inputs:ior = 1.5
                 float inputs:metallic = 0
                 float inputs:opacity = 1

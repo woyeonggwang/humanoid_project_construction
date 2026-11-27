@@ -33,9 +33,10 @@ humanoid_project/
 │                             collect_vla_place.py(내려놓기 시범 수집), vla_place_eval.py(내려놓기 실행·평가·녹화),
 │                             make_vlm_full_data.py(전체 연결용 VLM 데이터 생성), vla_full_eval.py(전체 연결 실행기·평가·녹화), make_full_video.py(전체 연결 자막 영상),
 │                             site_check.py(공사장 장면 점검: 모습·카메라 화면 비교·충돌), site_intro_video.py(공사장 소개 영상),
-│                             weld_check.py(토치·닿는 범위 점검), weld_eval.py(용접 실행·평가·녹화), make_weld_video.py(용접 근접 영상 편집)
-├─ vlm/                       VLM 판단 층: schema.py(명령 체계), templates.py·templates_full.py(문장 템플릿), common.py, train.py(LoRA), evaluate.py, infer_worker.py(실행용 작업자),
-│                             data/·data_full/(jsonl 은 git 포함, images/ 는 제외), results/(문장별 평가 출력), outputs/(어댑터, git 제외)
+│                             weld_check.py(토치·닿는 범위 점검), weld_eval.py(용접 실행·평가·녹화), make_weld_video.py(용접 근접 영상 편집),
+│                             make_vlm_site_data.py(용접 명령·배경을 섞은 VLM 데이터 생성)
+├─ vlm/                       VLM 판단 층: schema.py(명령 체계), templates.py·templates_full.py·templates_site.py(문장 템플릿), common.py, train.py(LoRA), evaluate.py, infer_worker.py(실행용 작업자),
+│                             data/·data_full/·data_site/(jsonl 은 git 포함, images/ 는 제외), results/(문장별 평가 출력), outputs/(어댑터, git 제외)
 ├─ vla/                       VLA: train_probe.py·infer_probe.py(메모리·시간 측정), convert_to_lerobot.py(시범 원자료 → LeRobot 형식), render_dataset.py(변환 확인),
 │                             train.py(SmolVLA 미세조정), policy_worker.py(행동 출력 작업자), swap_test.py(명령 바꿔치기 시험), merge_datasets.py(데이터셋 합치기), _win.py(경고창 막기). 별도 VLA 환경에서 실행
 ├─ data/                      VLA 시범 원자료·변환한 데이터셋·학습 결과·평가 결과 (git 제외)
@@ -50,7 +51,7 @@ humanoid_project/
   - gym.register 는 Isaac Sim 앱이 켜지기 전에 실행되므로 설정 위치를 문자열로만 넘기고 isaaclab 모듈은 import 하지 않음 (앱 전 import 시 오류 여부는 확인 필요)
 - 원격 저장소: https://github.com/woyeonggwang/humanoid_project_construction (2026-11-19 구성, `main` 브랜치). 커밋 전 개인정보(로컬 경로·PC 사양·이메일) 검사
 - 브랜치: `main` = 10단계(공사장 장면)까지 (2026-11-27 `vla_place_full`, `construction_scene` 을 차례로 fast-forward 로 합치고 세 브랜치를 원격에 올림. 충돌 없음. 병합 뒤 main 에서 9단계 전체 연결 평가를 작게 돌려 확인: 상자 하나 4/4, 둘 4/4, 넘어짐 0. 그 전의 `main` 은 8단계 2차(VLA 색 구분)까지였고 커밋 `575458f`, 2026-11-26 `vla_pick` 을 fast-forward 로 합친 것. 그보다 앞의 `main` 은 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지였고 커밋 `b1b20da`, 2026-11-20 `gait_reward` 를 합친 것. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22), `vlm_planner` = `loco_v2` 에서 갈라져 VLM 판단 층 (7단계, 2026-11-22). `vla_probe` = `vlm_planner` 에서 갈라져 VLA 조사 (8단계 준비, 2026-11-23), `vla_pick` = `vla_probe` 에서 갈라져 VLA 상체 제어 (8단계, 2026-11-23). 이 둘은 2026-11-26 원격에 올림. `vla_place_full` = `main` 에서 갈라져 내려놓기 VLA 와 전체 연결 (9단계, 2026-11-26. 1번 내려놓기 VLA 와 2번 전체 연결까지 함), `construction_scene` = `vla_place_full` 에서 갈라져 공사장 장면 (10단계, 2026-11-27), `welding` = `main` 에서 갈라져 용접 (11단계, 2026-11-27, push·main 병합은 하지 않음). `pick_place`·`loco_v2`·`vlm_planner` 는 2026-11-23 원격에 올림 (main 병합은 하지 않음)
-- .gitignore: `portfolio/`, `logs/`, `outputs/`, `__pycache__/`, `*.pt`, `data/`(VLA 시범·학습 결과), `vlm/data/images/`, `vlm/data_full/images/`, `vlm/outputs/` (`outputs/` 규칙에 함께 걸림), `vlm/unsloth_compiled_cache/`
+- .gitignore: `portfolio/`, `logs/`, `outputs/`, `__pycache__/`, `*.pt`, `data/`(VLA 시범·학습 결과), `vlm/data/images/`, `vlm/data_full/images/`, `vlm/data_site/images/`, `vlm/outputs/` (`outputs/` 규칙에 함께 걸림), `vlm/unsloth_compiled_cache/`
   - `outputs/`: train.py·play.py 실행 때 Hydra 가 실행 위치에 만드는 실행 기록. hydra.yaml 에 실행 폴더의 절대 경로가 들어가므로 올리지 않음
   - `logs/`: 체크포인트·영상이 커서 올리지 않음
 - `portfolio/`: 블로그·포트폴리오용 결과물(GIF·영상). **git 에 올리지 않음**
@@ -2255,6 +2256,87 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
   - 프레임에서 본 것: 로봇이 B 기둥 앞에 서서 오른팔의 토치를 보의 플랜지 사이로 넣고, 아크 빛과 불꽃이 튀며 아래에서 위로 올라감. 지나간 자리에 비드가 세로 줄로 남음. 머리 카메라 화면에도 토치와 아크가 보임. 자막은 용접 부위를 가리지 않음
   - 이 한 번의 값: 경로 오차 평균 0.4mm·최대 1.4mm, 덮은 비율 95%
 
+### 2번: VLM 재학습 — 용접 기술 추가 + 배경을 섞은 사진 (2026-11-27)
+#### 계획 형식 (`vlm/schema.py` 의 `site`, `--schema site`)
+- 9단계 형식(go_to·pick·place)에 더한 것: 장소 `steel_frame`, 기술 `weld(seam)`. 용접은 `go_to steel_frame` 한 번 뒤에 `weld` 를 용접선마다 차례로 적음
+  ```
+  "빨간 상자를 파란 판에 옮기고 B 기둥 용접해" →
+  {"plan": [{"skill": "go_to", "target": "pick_stand"}, {"skill": "pick", "instruction": "빨간 상자를 집어"},
+            {"skill": "go_to", "target": "place_stand"}, {"skill": "place", "instruction": "파란 판 위에 내려놔"},
+            {"skill": "go_to", "target": "steel_frame"}, {"skill": "weld", "seam": "column_B_seam_2"}, {"skill": "weld", "seam": "column_B_seam_4"}]}
+  ```
+- 용접선 이름은 `site_layout` 의 이름 그대로 (`schema.WELD_VERTICAL`. 데이터 생성 스크립트가 `site_layout.WELD_REACHABLE` 과 같은지 확인)
+- 말과 용접선의 대응 (2026-11-27 결정)
+  | 말 | 계획 |
+  |---|---|
+  | "A 기둥 세로 이음부", "C번 기둥 수직 용접선" | 그 기둥의 세로선 1개 |
+  | "B 기둥 왼쪽 세로 이음부" / "오른쪽" | `column_B_seam_2` / `column_B_seam_4` |
+  | "B 기둥 세로 이음부" (왼쪽·오른쪽을 말하지 않음), "B 기둥 용접 다 해", "B 기둥 쪽 이음부" | B 기둥의 세로선 2개 (닿는 것 전부) |
+  | "철골 전체", "철골의 이음부 전부" | 세로선 4개 (A → B 왼쪽 → B 오른쪽 → C) |
+  | "D 기둥 용접해" (D~H) | 거부 `unknown_target` |
+  | "A 기둥 가로 이음부" (손이 닿지 않음) | 거부 `unsupported_command` |
+  - 왼쪽·오른쪽은 철골을 마주 본 로봇 기준. 옮기기 쪽의 거부(`object_not_found`, `target_occupied`, 할 수 없는 일 `unsupported_command`)는 9단계 그대로
+  - 옮기기 + 용접에서 잘못된 곳은 한 군데만 두고 만듦 (옮기기 쪽이 틀리면 그 거부 코드, 아니면 용접 쪽의 거부 코드)
+- 용접 명령은 사진을 보지 않아도 답할 수 있음 (철골은 처음 자리의 뒤쪽이라 사진에 없음). 닿는 용접선이 어느 것인지는 시스템 프롬프트에 적혀 있고 모델이 그 표를 따름
+
+#### 문장 템플릿 (`vlm/templates_site.py`, 9단계 템플릿을 물려받음)
+- 더한 것: `weld`(용접만: 용접선 하나 / 기둥 하나 / 철골 전체 / 없는 기둥 / 닿지 않는 이음부), `move_weld`(상자 한 쌍 옮기기 + 용접), `goto` 에 철골 추가
+- 낱말을 여러 표현에서 뽑음: 이음부·용접선·이음매, 세로·수직, 가로·수평, 왼쪽·왼편, "B 기둥"·"B번 기둥". 템플릿마다 마지막 문장 패턴은 test 전용 (용접: "… 용접 작업을 시작해", 옮기기 + 용접: "… 옮겨. 그러고 나서 …", 철골로 가기: "철골 구조물 쪽으로 가 봐")
+- 판 위에 상자가 이미 놓인 장면에서는 '그 판에 놓으라'는 명령(`target_occupied`)을 40% 확률로 먼저 고름: 이 결과의 학습 예가 적으면 판이 찼는지를 잘 가려내지 못했음 (9단계). 처음 만든 데이터는 192개(4%)였고 다시 만들어 452개(9.4%)
+
+#### 배경 무작위화 (`scripts/make_vlm_site_data.py`)
+- 10단계 B 에서 VLM 이 받침대 뒤의 자재를 판 위의 상자로 보고 '판이 참'으로 잘못 거부했음 → 학습 사진의 배경을 줄마다 다섯 가지 중 하나로
+  | 배경 (`bg`) | 과제 | 내용 |
+  |---|---|---|
+  | `base` | `Humanoid-G1-VLA-Full-v0` | 9단계 장면 |
+  | `site_a` | `Humanoid-G1-Site-A-v0` | 공사장 A (카메라에 보이지 않는 곳에만 모델) |
+  | `site_b1` | `Humanoid-G1-Site-B1-v0` | A + 받침대 뒤 펜스·자재 |
+  | `site_b2` | `Humanoid-G1-Site-B2-v0` | B1 + 콘크리트 바닥 |
+  | `site_dirt` | `Humanoid-G1-Site-B3-v0` | B1 + 흙 바닥 (`G1SiteB3EnvCfg`, 이번에 추가) |
+  - 배경마다 과제가 달라 한 번 실행에 한 배경의 사진만 찍음 (`--bg`). 줄은 시드로 정해지므로 다섯 번의 실행이 같은 jsonl 을 씀
+  - B 배치의 자재·펜스 자리는 고정 (배경 안에서 자리를 흩지는 않음). 그 밖의 무작위화(상자·판, 카메라 자세, 조명)는 9단계와 같음
+- 콘크리트 바닥 재질 색 (`SM_Floor_Concrete.usda` 의 diffuseColor 만 바꿈): 판 (0.42, 0.42, 0.40) → **(0.09, 0.09, 0.085)**, 줄눈 (0.22, 0.22, 0.21) → **(0.05, 0.05, 0.048)**
+  - 처음 (0.20, 0.20, 0.19) 로 낮췄을 때도 사진에서 거의 흰색이라 흰 받침대와 구분되지 않았음. 지금 값에서는 중간 회색으로 보임 (사진으로 확인)
+- 흙 바닥(`SM_Floor_Dirt`)을 이번에 처음 불러와 확인: 햇빛 아래에서 밝은 모래색으로 보이고 크기·자리 이상 없음 (사진으로 확인). 재질은 바꾸지 않음
+- 데이터: `vlm\data_site\` train 4800·val 300·test 600 (본 패턴 300 + 처음 보는 패턴 300), 사진 5700장 (배경별 1110~1193장, 배경 하나에 약 2분). 시드 43
+  - train 정답 종류: 계획 2537, `unsupported_command` 864, `object_not_found` 736, `target_occupied` 452, `unknown_target` 211
+  - train 템플릿: weld 1026, move1 987, move_weld 858, move2 650, unsupported 613, goto 362, pick 304
+  - 처음 보는 패턴의 문장이 train 에 그대로 있는 경우 0개 (확인함)
+  ```
+  python -u scripts\make_vlm_site_data.py --headless --bg base --kit_args "--/app/vulkan=false --/renderer/active=d3d12"     (site_a, site_b1, site_b2, site_dirt 도 같은 식)
+  ```
+
+#### 학습과 평가
+- `cd vlm` 후 `python train.py --schema site --data data_site --out outputs/qwen35_08b_site` — 7·9단계와 같은 설정 (Qwen3.5-0.8B, LoRA r 16, 3 에포크 = 1800스텝, 묶음 8), 처음부터 학습 (9단계 어댑터에서 이어 학습한 것이 아님) → 31.2분 (같은 GPU 에서 다른 평가를 함께 돌린 시간), GPU 최대 2.7GB, val 손실 0.00015
+- `python evaluate.py --model Qwen/Qwen3.5-0.8B --adapter outputs/qwen35_08b_site/lora --name ft_08b_site --data data_site --schema site --max_new_tokens 320` (test 600개, 문장당 0.54초, GPU 최대 3.4GB. 문장별 출력 `vlm/results/ft_08b_site.jsonl`)
+  | 항목 | 결과 | 통과 기준 |
+  |---|---|---|
+  | 정확도: 전체 / 본 패턴 / **처음 보는 패턴** | 99.7% / 100% / **99.3%** (300개) | 처음 보는 패턴 90% 이상 ✔ |
+  | **거부 정확도**: 전체 / 처음 보는 패턴 | **99.3%** (286개) / 98.6% (141개) | 90% 이상 ✔ |
+  | 거부 종류별 | `object_not_found` 97.9% (97), `target_occupied` 100% (56), `unsupported_command` 100% (106), `unknown_target` 100% (27) | |
+  | **배경별 정확도** (base / site_a / site_b1 / site_b2 / site_dirt) | **100% (123) / 99.2% (119) / 100% (100) / 99.2% (127) / 100% (131)** | 각각 95% 이상 ✔ |
+  | 배경별, 계획을 내야 하는 문장만 | 100% / 100% / 100% / 100% / 100% (69·56·54·66·69개) | |
+  | 용접 (하나 / 기둥 / 전체 / 없는 기둥 / 닿지 않는 이음부) | 모두 100% (41·34·17·18·17개) | |
+  | 옮기기 + 용접 (ok / 없는 색 / 판이 참 / 없는 기둥 / 닿지 않는 이음부) | 모두 100% (48·15·17·9·21개) | |
+  | 처음 보는 패턴의 템플릿별 | move2 95.5% (44), 나머지 100% | |
+  - 틀린 2개는 모두 처음 보는 패턴의 두 쌍 옮기기에서 '없는 색'을 '판이 참'으로 답한 것 (그 장면에 찬 판도 있었음)
+  - 10단계에서 87~89% 이던 B 배경(같은 종류의 사진)에서 100%·99.2%. `target_occupied` 는 다섯 배경을 합쳐 56/56
+- **2번 VLM 판정 (2026-11-27): 통과** (처음 보는 패턴 99.3%, 거부 99.3%, 배경별 99.2~100%)
+#### B 배치 채택 판단 (2026-11-27)
+- 콘크리트 색을 바꿨으므로 VLA 를 B2 배경에서 다시 잼 (10단계 B 단계와 같은 방법: 정답 계획으로 상자 하나 옮기기 48개, 시드 7000, 환경 12개)
+  `python -u scripts\vla_full_eval.py --headless --task Humanoid-G1-Site-B2-v0 --mode vla --ckpt data\vla_place\train\joint_14k\checkpoints\014000\pretrained_model --plans_from expected --n_one 48 --n_two 0 --n_refuse 0 --num_envs 12 --out data\weld\eval_b2_vla.json --kit_args "…"`
+  | 항목 | 9단계 장면 (9단계 기록) | B2, 밝은 콘크리트 (10단계) | **B2, 어둡게 고친 콘크리트 (11단계)** | 기준 |
+  |---|---|---|---|---|
+  | VLA 집기 | 99% (95/96) | 48/48 | **48/48 (100%)** | 95% 이상 ✔ |
+  | VLA 내려놓기 | 99% (95/96) | 48/48 | **47/48 (97.9%)** | 95% 이상 ✔ |
+  | 넘어짐 | 0 | 0 | 0 | |
+  | VLM 정확도 (그 배경의 test 사진) | 100% | 87.2% (10단계의 VLM) | **99.2%** (127개. 계획을 내야 하는 66개는 100%) | 95% 이상 ✔ |
+  - 실패 1개: 내려놓기에서 엉뚱한 판에 놓음. 걸린 시간 평균 44.8초 (9단계 44.6초)
+  - GPU 전체 사용량 (환경 12개, VLM 작업자 없이): Isaac 6.8GB, VLA 를 올린 뒤 7.9GB
+- **판단: B2(공사장 A + 받침대 뒤 펜스·자재 + 콘크리트 바닥)를 최종 장면으로 채택.** 3번은 과제 `Humanoid-G1-Weld-B2-v0`(B2 + 토치를 든 로봇)에서 진행
+  - 근거 ① 다시 학습한 VLM 이 B2 사진에서 99.2% (10단계의 VLM 은 87.2%) ② VLA 가 B2 에서 집기 100%·내려놓기 97.9% 로 95% 이상 ③ 걷는 바닥의 물리는 그대로 (겉모습만 1cm 띄워 깖) ④ 두 카메라에 공사장이 보이는 장면이 됨 (A 는 카메라에 아무것도 보이지 않게 둔 것)
+  - B1(바닥은 그대로)은 VLM 100%, VLA 는 10단계에서 48/48·48/48. B2 가 통과했으므로 B1 은 이번에 다시 재지 않음. 흙 바닥은 VLM 100% 이지만 VLA 를 재지 않아 후보에서 뺌
+
 ### 11단계 시행착오
 서서 하는 평가(`weld_eval.py`, 설 자리 ±5cm·±5° 흩음)의 성공률은 아래 순서로 고쳐 가며 4/24 → 19/24 → 20/24 → 36/48 → 44/48 → 84/96 → 90/96 → 본 평가 95/96 으로 올랐다 (보정을 넣었다가 내려간 때도 있음).
 
@@ -2304,7 +2386,7 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
 
 ## 미해결 과제
 - 10단계 (공사장 장면)
-  - 카메라에 보이는 배치(B1·B2)는 VLM 이 87~89% 로 떨어져 채택하지 않음. 배경을 바꾼 사진으로 VLM 을 다시 학습할지는 정하지 않음. VLA 는 두 후보에서 그대로였음 (48/48·48/48)
+  - 카메라에 보이는 배치(B1·B2)는 VLM 이 87~89% 로 떨어져 10단계에서는 채택하지 않음 → 11단계에서 배경을 섞은 사진으로 VLM 을 다시 학습해 B2 를 채택 (VLM 99.2%, VLA 집기 100%·내려놓기 97.9%)
   - 9단계 모델의 약점이 드러남: 먼저 옮긴 상자의 색이 다음에 놓을 판의 색과 같으면, 그 상자가 올라간 다른 판에 놓는 경우가 있음 (시드 7100 의 2개 중 9단계 장면 1개·A 배치 2개 실패. 시드 7000 의 8개에서는 없음). 공사장과 무관. 9단계 평가(시드 7000)에서는 나오지 않았음
   - 공사장 장면은 환경을 한 줄(간격 80m)로 세워야 다른 환경의 모델이 화면에 영향을 주지 않음. 9단계의 격자 배치에서 환경마다 바닥 반짝임이 달랐던 원인은 따로 확인하지 않음 (확인 필요)
   - 카메라의 그리는 거리(15m) 설정이 먼 물체를 가리지 못함 (30m 앞의 다른 환경이 보였음). 7단계에 적은 '15m 까지만 그림' 은 이 렌더러에서는 맞지 않는 것으로 보임 (설정이 적용되지 않는 것인지는 확인 필요)

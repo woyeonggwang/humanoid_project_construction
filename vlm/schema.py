@@ -84,4 +84,33 @@ SYSTEM_PROMPT_FULL = (
     '할 수 없는 일이면 {"plan": [], "error": "unsupported_command"}'
 )
 
-SYSTEM_PROMPTS = {"stands": SYSTEM_PROMPT, "full": SYSTEM_PROMPT_FULL}
+# ---------------------------------------------------------------------------
+# 11단계 (schema 이름 "site"): 9단계의 옮기기 + 철골 용접
+# ---------------------------------------------------------------------------
+PLACES_SITE = ["pick_stand", "place_stand", "steel_frame"]
+SKILLS_SITE = ["go_to", "pick", "place", "weld"]
+ERRORS_SITE = ERRORS + ["unknown_target"]
+# 용접선 이름은 humanoid_tasks/g1_carry/site_layout.py (assets/weld_seams.json) 의 이름과 같다.
+# 철골 기둥은 A·B·C (철골을 마주 보고 왼쪽부터). 세로 이음부만 손이 닿는다: A 기둥 1개, B 기둥 2개(왼쪽·오른쪽), C 기둥 1개
+WELD_VERTICAL = {"A": ["column_A_seam_2"], "B": ["column_B_seam_2", "column_B_seam_4"], "C": ["column_C_seam_2"]}
+WELD_B_SIDE = {"left": "column_B_seam_2", "right": "column_B_seam_4"}
+WELD_ALL = [s for c in ("A", "B", "C") for s in WELD_VERTICAL[c]]
+
+SYSTEM_PROMPT_SITE = (
+    "너는 공사장에서 상자를 옮기고 철골을 용접하는 로봇의 명령 해석기다. 로봇 머리 카메라 사진과 한국어 명령을 보고 JSON 계획으로만 답한다.\n"
+    "장소: pick_stand(색 상자가 놓인 받침대, 사진 왼쪽), place_stand(색 판이 깔린 받침대, 사진 오른쪽), steel_frame(철골)\n"
+    "색: 빨간, 파란, 초록, 노란 (상자와 판)\n"
+    "기술: go_to(target), pick(instruction), place(instruction), weld(seam)\n"
+    'pick 의 instruction 은 "<색> 상자를 집어", place 의 instruction 은 "<색> 판 위에 내려놔" 로 쓴다. '
+    "상자 하나를 옮길 때마다 go_to pick_stand, pick, go_to place_stand, place 순서로 적는다\n"
+    "철골 기둥은 A, B, C. 용접할 수 있는 세로 이음부: column_A_seam_2(A 기둥), column_B_seam_2(B 기둥 왼쪽), "
+    "column_B_seam_4(B 기둥 오른쪽), column_C_seam_2(C 기둥). 가로 이음부는 손이 닿지 않는다. "
+    "용접은 go_to steel_frame 한 번 뒤에 weld 를 용접선마다 차례로 적는다. 기둥만 말하면 그 기둥의 세로 이음부를 모두 적는다\n"
+    '형식: {"plan": [{"skill": ..., ...}]}\n'
+    '사진에 없는 색의 상자나 판이면 {"plan": [], "error": "object_not_found"}, '
+    '놓을 판에 이미 상자가 있으면 {"plan": [], "error": "target_occupied"}, '
+    '없는 기둥이면 {"plan": [], "error": "unknown_target"}, '
+    '손이 닿지 않는 이음부이거나 할 수 없는 일이면 {"plan": [], "error": "unsupported_command"}'
+)
+
+SYSTEM_PROMPTS = {"stands": SYSTEM_PROMPT, "full": SYSTEM_PROMPT_FULL, "site": SYSTEM_PROMPT_SITE}
