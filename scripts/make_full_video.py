@@ -24,6 +24,8 @@ parser.add_argument("--gif_width", type=int, default=720)
 parser.add_argument("--gif_fps", type=int, default=8)
 parser.add_argument("--gif_speed", type=float, default=4.0)
 parser.add_argument("--gif_colors", type=int, default=64)
+parser.add_argument("--inset", choices=["right", "left"], default="right",
+                    help="머리 카메라 화면을 둘 곳 (위쪽 오른쪽 / 왼쪽). 왼쪽이면 VLM 에 준 사진은 그 옆에 둔다. 받침대·판·용접 부위를 가리지 않는 쪽으로")
 parser.add_argument("--font", default=os.path.join(os.environ.get("WINDIR", ""), "Fonts", "malgun.ttf"),
                     help="한글 글꼴 파일 (기본: Windows 의 맑은 고딕)")
 args = parser.parse_args()
@@ -47,7 +49,7 @@ def plan_lines(raw: str) -> list[str]:
         return ["계획: (읽지 못함)"]
     if obj.get("error"):
         return [f'계획: {{"plan": [], "error": "{obj["error"]}"}}']
-    parts = [f'{st.get("skill")}({st.get("target") or st.get("instruction", "")})' for st in obj.get("plan", [])]
+    parts = [f'{st.get("skill")}({st.get("target") or st.get("instruction") or st.get("seam", "")})' for st in obj.get("plan", [])]
     rows = [" → ".join(parts[k:k + 4]) for k in range(0, len(parts), 4)]
     return [("계획: " if k == 0 else "      ") + row for k, row in enumerate(rows)]
 
@@ -66,10 +68,11 @@ for k, e in enumerate(ev):
     if end > start:
         bad = e["text"].startswith("실패")
         texts.append((f"지금: {e['text']}", "0xFF8080" if bad else "0x9BE39B", 24, start, end, 720 - 50))
-chain = ["[1:v]scale=250:250[head]", "[0:v][head]overlay=W-w-16:16[v0]", "[2:v]scale=250:250[photo]",
-         "[v0][photo]overlay=16:16:enable='between(t,0,4)'[v1]"]
+head_x, photo_x = (1280 - 250 - 16, 16) if args.inset == "right" else (16, 16 + 250 + 16)
+chain = ["[1:v]scale=250:250[head]", f"[0:v][head]overlay={head_x}:16[v0]", "[2:v]scale=250:250[photo]",
+         f"[v0][photo]overlay={photo_x}:16:enable='between(t,0,4)'[v1]"]
 last = "v1"
-labels = [("VLM 에 준 사진", 16, 270, 0.0, 4.0), ("머리 카메라", 1280 - 250 - 16, 270, 0.0, total)]
+labels = [("VLM 에 준 사진", photo_x, 270, 0.0, 4.0), ("머리 카메라", head_x, 270, 0.0, total)]
 for k, (text, x, y, start, end) in enumerate(labels):
     path = os.path.join(tmp, f"l{k}.txt")
     open(path, "w", encoding="utf-8", newline="\n").write(text)

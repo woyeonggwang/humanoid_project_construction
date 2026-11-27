@@ -1,18 +1,20 @@
 # humanoid_project
 
-Unitree G1 휴머노이드가 한국어 명령을 듣고 상자를 집어 옮기도록 만드는 프로젝트입니다. NVIDIA Isaac Lab 시뮬레이터에서 진행합니다.
+Unitree G1 휴머노이드가 한국어 명령을 듣고 공사장에서 상자를 집어 옮기고 철골을 용접하도록 만드는 프로젝트입니다. NVIDIA Isaac Lab 시뮬레이터에서 진행합니다.
 
 ```
-머리 카메라 사진 + 한국어 명령            예) "빨간 상자는 파란 판에, 초록 상자는 노란 판에 옮겨"
+머리 카메라 사진 + 한국어 명령            예) "빨간 상자를 파란 판에 옮기고 B 기둥 용접해"
         │  소형 VLM (LoRA 파인튜닝): 명령을 단계로 나눔
         ▼
 계획 JSON   {"plan": [{"skill": "go_to", "target": "pick_stand"}, {"skill": "pick", "instruction": "빨간 상자를 집어"},
-                      {"skill": "go_to", "target": "place_stand"}, {"skill": "place", "instruction": "파란 판 위에 내려놔"}, ...]}
+                      {"skill": "go_to", "target": "place_stand"}, {"skill": "place", "instruction": "파란 판 위에 내려놔"},
+                      {"skill": "go_to", "target": "steel_frame"}, {"skill": "weld", "seam": "column_B_seam_2"}, ...]}
         │  실행기: 단계를 차례로 실행
         ▼
 go_to       → 걷기·균형 = 강화학습 정책 (PPO)
 pick·place  → 팔 = VLA (머리 카메라 사진 + 팔 상태 + 단계의 한국어 문장 → 팔 관절 목표값과 잡기 신호)
-잡기 = 상자를 손에 고정 (손가락으로 쥐지는 않음)
+weld        → 오른팔 = 스크립트 IK (토치 끝을 용접선에서 1cm 띄운 채 일정한 속도로 따라감)
+잡기 = 상자를 손에 고정 (손가락으로 쥐지는 않음). 용접 = 토치 끝을 따라 움직이는 동작과 겉모습 효과 (금속이 녹는 것은 다루지 않음)
 ```
 
 5~7단계에서는 팔을 스크립트(상태 머신 + 양팔 IK)로 움직였고, 8~9단계에서 그 자리를 VLA 로 바꿨습니다. 스크립트 IK 는 비교 기준과 시범 데이터 수집에 씁니다.
@@ -30,13 +32,14 @@ pick·place  → 팔 = VLA (머리 카메라 사진 + 팔 상태 + 단계의 한
 | 8 | VLA 상체 제어 | 머리 카메라 사진 + 팔 상태 + 한국어 명령 → 팔 관절 목표값과 잡기 신호 (SmolVLA 미세조정) |
 | 9 | 내려놓기도 VLA 로, 전체 연결 | 집기와 내려놓기를 한 VLA 모델로 (명령한 색의 상자를 집고, 명령한 색의 판 위에 내려놓기). 한국어 명령 → VLM 이 단계로 나눔 → 걷기 정책 + VLA 로 상자 하나·둘 옮기기 |
 | 10 | 공사장 장면 | 직접 만든 공사장 모델(펜스·자재 더미·철골·비계·사무실)을 장면에 배치. 로봇의 카메라에 보이지 않는 곳에 두면 9단계 성능이 그대로임을 확인 |
+| 11 | 용접 | 철골의 세로 용접선을 토치로 따라가는 동작 (오른팔 IK + 상태 머신, 불꽃·비드 효과). VLM 에 용접 기술(weld)과 배경이 다른 사진을 더해 다시 학습. 한 명령으로 옮기기 + 용접. 받침대 뒤 펜스·자재와 콘크리트 바닥이 카메라에 보이는 배치를 최종 장면으로 채택 |
 
 단계별 설계 결정, 결과 표, 시행착오는 [CLAUDE.md](CLAUDE.md) 에 있습니다.
 
 ## 폴더
 
 - `assets/` — 공사장 장면 모델 (USD 13개)과 철골의 용접선 좌표
-- `humanoid_tasks/g1_carry/` — 과제 설정 (환경, 보상·이벤트, IK, 상자 집어 옮기기 상태 머신, VLM·VLA 장면, 공사장 장면)
+- `humanoid_tasks/g1_carry/` — 과제 설정 (환경, 보상·이벤트, IK, 상자 집어 옮기기 상태 머신, VLM·VLA 장면, 공사장 장면, 용접 토치·IK·상태 머신)
 - `scripts/` — 학습·평가·녹화·데이터 생성·데모 실행 (전체 연결 실행기는 `vla_full_eval.py`)
 - `vlm/` — VLM 판단 층 (명령 체계, 문장 템플릿, 파인튜닝, 평가, 실행용 작업자)
 - `vla/` — VLA 상체 제어 (시범 데이터 변환·합치기, SmolVLA 미세조정, 행동 출력 작업자, 명령 바꿔치기 시험, 메모리 측정)
@@ -111,11 +114,24 @@ python scripts\vla_full_eval.py --headless --task Humanoid-G1-Site-A-v0 --mode v
 python scripts\site_intro_video.py --headless --task Humanoid-G1-Site-A-v0 --out portfolio\g1_site_intro.mp4
 ```
 
+용접 (닿는 범위 점검 → 용접 동작 평가 → VLM 데이터·학습 → 옮기기 + 용접 전체 연결. 사진은 배경 다섯 가지를 `--bg` 로 하나씩 찍음):
+
+```
+python scripts\weld_check.py --headless --mode reach
+python scripts\weld_eval.py --headless --trials 24 --num_envs 24 --out data\weld\eval.json
+python scripts\make_vlm_site_data.py --headless --bg base
+cd vlm
+python train.py --schema site --data data_site --out outputs/qwen35_08b_site
+python evaluate.py --model Qwen/Qwen3.5-0.8B --adapter outputs/qwen35_08b_site/lora --name ft_08b_site --data data_site --schema site --max_new_tokens 320
+cd ..
+python scripts\vla_full_eval.py --headless --schema site --mode vla --ckpt data\vla_place\train\joint_14k\checkpoints\last\pretrained_model --n_one 0 --n_two 0 --n_weld1 12 --n_weldn 8 --n_move_weld 14 --n_refuse 12 --out data\weld\eval_full.json
+```
+
 ## 모델과 데이터
 
 - **VLM**: [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) 를 LoRA 로 파인튜닝해 씁니다. 모델 카드에 표기된 라이선스는 Apache License 2.0 입니다. 모델 가중치와 학습한 어댑터는 이 저장소에 들어 있지 않습니다.
 - **VLM 학습 데이터**: 모두 이 프로젝트에서 만든 합성 데이터입니다. 사진은 Isaac Lab 장면(7단계: 받침대 3개와 색 상자, 9단계: 상자 받침대와 색 판 받침대)을 로봇 머리 카메라로 찍은 것이고, 명령 문장과 정답 JSON 은 `vlm/templates.py`·`vlm/templates_full.py` 의 템플릿이 장면의 실제 상태로부터 자동으로 만듭니다. 외부 데이터셋은 쓰지 않았습니다. 사진은 용량이 커서 저장소에 올리지 않고, `scripts/make_vlm_data.py`·`scripts/make_vlm_full_data.py` 를 같은 시드로 실행하면 같은 장면·문장으로 다시 만들 수 있습니다.
 - **VLA**: [SmolVLA](https://huggingface.co/lerobot/smolvla_base) (`lerobot/smolvla_base`, 4.5억 파라미터)를 [LeRobot](https://github.com/huggingface/lerobot) 으로 미세조정해 씁니다. 모델 카드에 표기된 라이선스는 Apache License 2.0 이고, 바탕이 되는 VLM(SmolVLM2-500M-Video-Instruct)도 Apache License 2.0 입니다. LeRobot 코드도 Apache License 2.0 입니다. 가중치와 학습한 체크포인트는 이 저장소에 들어 있지 않습니다.
 - **VLA 시범 데이터**: 이 프로젝트의 상자 집기 스크립트(상태 머신 + IK)를 Isaac Lab 에서 돌려 자동으로 모은 합성 데이터입니다 (머리 카메라 영상, 팔 관절 위치·목표값, 잡기 신호, 한국어 명령. 집기와 내려놓기). 외부 데이터셋은 쓰지 않았고, 용량이 커서 저장소에 올리지 않습니다.
-- **장면 모델**: 공사장 장면의 모델(`assets/usd/`, 펜스·안전 고깔·바리케이드·자재 더미·철골·비계·사무실·바닥)은 직접 제작(Blender)했습니다. 외부 모델·텍스처는 쓰지 않았습니다.
+- **장면 모델**: 공사장 장면의 모델(`assets/usd/`, 펜스·안전 고깔·바리케이드·자재 더미·철골·비계·사무실·바닥)은 직접 제작(Blender)했습니다. 외부 모델·텍스처는 쓰지 않았습니다. 용접 토치는 코드로 만든 원통 네 개짜리 겉모습입니다.
 - **로봇 모델**: Isaac Lab 에 들어 있는 Unitree G1 설정을 상속해 씁니다.
