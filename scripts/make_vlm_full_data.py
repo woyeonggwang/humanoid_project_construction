@@ -25,6 +25,8 @@ parser.add_argument("--n_val", type=int, default=300)
 parser.add_argument("--n_test", type=int, default=400, help="절반은 본 패턴, 절반은 처음 보는 패턴")
 parser.add_argument("--num_envs", type=int, default=16, help="한 번에 찍는 사진 수")
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--task", type=str, default="Humanoid-G1-VLA-Full-v0", help="장면만 바꿔 같은 줄을 다시 찍을 때 (예: 10단계 공사장 장면)")
+parser.add_argument("--splits", type=str, default="train,val,test", help="사진을 찍고 저장할 묶음. 줄은 항상 모두 만들므로 일부만 골라도 내용이 같다")
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
 args_cli.enable_cameras = True
@@ -47,7 +49,7 @@ from humanoid_tasks.g1_carry.vlm_scene import set_lighting  # noqa: E402
 from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 from templates_full import Gen  # noqa: E402
 
-TASK = "Humanoid-G1-VLA-Full-v0"
+TASK = args_cli.task
 
 
 def sample_robot(rng: random.Random):
@@ -72,6 +74,9 @@ for split, n, mode in plan:
         counts[split] = idx + 1
         rows.append((split, {"image": f"images/{split}_{idx:05d}.png", **row, "scene": vf.describe(scene)}, scene))
 print("[data] 만들 줄: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+keep = set(args_cli.splits.split(","))
+rows = [r for r in rows if r[0] in keep]
+counts = {k: v for k, v in counts.items() if k in keep}
 
 # ---- 2. 환경 (로봇은 몸을 공중에 고정하고 짐 든 자세) ----
 N = args_cli.num_envs

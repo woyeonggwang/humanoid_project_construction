@@ -214,3 +214,16 @@ gym.register(
         "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
     },
 )
+
+# 10단계: 공사장 장면 (9단계 전체 연결 장면 + 공사장 모델. A = 두 카메라에 보이지 않는 곳에만, B1·B2 = 카메라에 보이는 배치 후보,
+# Empty = 비교용으로 환경 배치만 같고 모델은 없음)
+for _site in ("A", "B1", "B2", "Empty"):
+    gym.register(
+        id=f"Humanoid-G1-Site-{_site}-v0",
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"humanoid_tasks.g1_carry.site_cfg:G1Site{_site}EnvCfg",
+            "rsl_rl_cfg_entry_point": _LOCO_V2_AGENT_CFG,
+        },
+    )
