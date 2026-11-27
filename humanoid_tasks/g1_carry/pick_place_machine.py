@@ -198,22 +198,22 @@ class PickPlaceMachine:
         self._start_move(m, self._pelvis_to_world(OPEN_POSE[0], OPEN_POSE[1], OPEN_POSE[2]), 75)
 
     def start_walk(self, target_xy: torch.Tensor, target_yaw: torch.Tensor, obstacles: torch.Tensor | None = None,
-                   keep_box: bool = False):
-        """go_to 기술: 목표 받침대 앞까지 걸어가 멈춘다 (상태는 B 쪽 걷기를 그대로 씀).
+                   keep_box: bool = False, mask: torch.Tensor | None = None):
+        """go_to 기술: mask 환경(기본: 전부)이 목표 받침대 앞까지 걸어가 멈춘다 (상태는 B 쪽 걷기를 그대로 씀).
 
-        keep_box=True 면 지금 붙어 있는 상자를 든 채 걷는다 (take_box 로 붙였거나 밖에서 집은 뒤). 팔 관절 목표는 그대로 둔다.
+        keep_box=True 면 지금 다루는 상자(붙어 있으면 든 채)를 그대로 둔다. 팔 관절 목표는 건드리지 않는다.
         """
-        m = torch.ones(self.n, dtype=torch.bool, device=self.device)
+        m = torch.ones(self.n, dtype=torch.bool, device=self.device) if mask is None else mask
         if not keep_box:
             self.box = None
-        self.dst_xy[:], self.dst_yaw[:] = target_xy, target_yaw
+        self.dst_xy[m], self.dst_yaw[m] = target_xy[m], target_yaw[m]
         dir_b = torch.stack([torch.cos(target_yaw), torch.sin(target_yaw)], dim=1)
-        self.stance_b_xy[:] = target_xy - STANCE_DIST * dir_b
+        self.stance_b_xy[m] = (target_xy - STANCE_DIST * dir_b)[m]
         if obstacles is not None:
             self.obstacles = obstacles
-        self.fail_state[:] = -1
-        self.reapproach_b[:] = 0
-        self.t_start[:] = self.step
+        self.fail_state[m] = -1
+        self.reapproach_b[m] = 0
+        self.t_start[m] = self.step
         self.walk_only = True
         self._enter_backoff(m, S_BACK_B, S_WALK_B)
 
@@ -704,7 +704,7 @@ class PickPlaceMachine:
                 go = still & ~retry
                 self.rec["stance_b_x"][go], self.rec["stance_b_y"][go], self.rec["stance_b_yaw"][go] = ex[go], ey[go], yerr[go]
                 self.rec["stop_turn_b"][go] = wrap(robot.data.heading_w - self.arrive_yaw)[go]
-                if self.walk_only:
+                if self.walk_only or self.until == "stand":  # 받침대 앞에 서는 데까지만 (그 뒤는 밖에서 팔을 움직임)
                     self.rec["t_total"][go] = ((self.step - self.t_start) * self.dt)[go]
                     self._set_state(go, S_DONE)
                 else:

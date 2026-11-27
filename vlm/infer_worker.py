@@ -18,6 +18,7 @@ import time
 import torch
 
 from common import extract_json, generate, load_image, load_model
+from schema import SYSTEM_PROMPTS
 
 MARK = "@@VLM@@"
 
@@ -30,6 +31,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="Qwen/Qwen3.5-0.8B")
     ap.add_argument("--adapter", default=None)
+    ap.add_argument("--schema", choices=list(SYSTEM_PROMPTS), default="stands", help="명령 체계 (학습 때와 같은 것)")
+    ap.add_argument("--max_new_tokens", type=int, default=128, help="생성할 최대 토큰 수 (full 의 두 쌍 계획은 길어서 320 을 씀)")
     args = ap.parse_args()
     sys.stdin.reconfigure(encoding="utf-8")
     sys.stdout.reconfigure(encoding="utf-8")
@@ -46,7 +49,8 @@ def main():
         if req.get("quit"):
             break
         t0 = time.time()
-        raw = generate(model, processor, [load_image(req["image"])], [req["text"]])[0]
+        raw = generate(model, processor, [load_image(req["image"])], [req["text"]], max_new_tokens=args.max_new_tokens,
+                       system=SYSTEM_PROMPTS[args.schema])[0]
         reply({"raw": raw, "json": extract_json(raw), "latency_s": round(time.time() - t0, 3),
                "gpu_mb": int(torch.cuda.max_memory_allocated() / 2**20)})
 

@@ -24,8 +24,8 @@ PAD_TOP_Z = WIDE_STAND_SIZE[2] + PAD_SIZE[2]  # 판 윗면 높이
 PAD_SHADE = 0.75  # 판의 색 = 상자 색보다 조금 어둡게 (같은 색 상자가 올라가도 구분되게)
 PAD_NAMES = tuple(f"pad_{c}" for c in BOX_COLORS)
 
-# VLM 전용 카메라: 7단계의 머리 카메라와 같은 자리·숙인 각도, 가로 시야각만 약 90° 로 넓힘
-VLM_CAM_FOCAL = 10.5
+# VLM 전용 카메라: 7단계의 머리 카메라와 같은 자리·숙인 각도, 가로 시야각만 약 93° 로 넓힘
+VLM_CAM_FOCAL = 10.0
 
 
 def _kinematic_cuboid(name: str, size, color, pos) -> RigidObjectCfg:

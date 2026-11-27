@@ -3,6 +3,7 @@
 실행 (vlm 폴더, 별도 파인튜닝 환경):
   python train.py                                             # 기본: unsloth/Qwen3.5-0.8B → outputs/qwen35_08b/lora
   python train.py --model unsloth/Qwen3.5-2B --out outputs/qwen35_2b
+  python train.py --schema full --data data_full --out outputs/qwen35_08b_full   # 9단계 전체 연결용
 평가:
   python evaluate.py --model Qwen/Qwen3.5-0.8B --adapter outputs/qwen35_08b/lora --name ft_08b
 
@@ -26,6 +27,7 @@ import torch
 from transformers import Trainer, TrainingArguments
 
 from common import build_prompt, load_image
+from schema import SYSTEM_PROMPTS
 
 class Rows(torch.utils.data.Dataset):
     def __init__(self, data_dir: str, split: str):
@@ -43,8 +45,9 @@ class Rows(torch.utils.data.Dataset):
 class Collator:
     """묶음을 모델 입력으로 바꾼다. 프롬프트 부분의 labels 는 -100."""
 
-    def __init__(self, processor):
+    def __init__(self, processor, system: str):
         self.processor = processor
+        self.system = system
         tok = processor.tokenizer
         self.end = "<|im_end|>" if "<|im_end|>" in tok.get_vocab() else tok.eos_token
 
@@ -52,7 +55,7 @@ class Collator:
         proc = self.processor
         proc.tokenizer.padding_side = "right"
         images = [b["image"] for b in batch]
-        prompts = [build_prompt(proc, b["input"]) for b in batch]
+        prompts = [build_prompt(proc, b["input"], self.system) for b in batch]
         full = [p + b["output"] + self.end for p, b in zip(prompts, batch)]
         enc = proc(text=full, images=images, return_tensors="pt", padding=True)
         # 프롬프트 길이(사진 자리 토큰이 펼쳐진 뒤 기준)를 재서 그만큼 가린다
@@ -79,6 +82,8 @@ def main():
     ap.add_argument("--mem_cap_gb", type=float, default=10.0,
                     help="이 프로세스가 쓸 GPU 메모리 상한 (GB). 넘으면 느려지는 대신 오류로 멈춤")
     ap.add_argument("--no_vision", action="store_true", help="시각 쪽 층에는 LoRA 를 붙이지 않음")
+    ap.add_argument("--schema", choices=list(SYSTEM_PROMPTS), default="stands",
+                    help="명령 체계: stands = 7단계(받침대 3개), full = 9단계 전체 연결(상자 → 판). 시스템 프롬프트가 달라짐")
     args = ap.parse_args()
 
     total_gb = torch.cuda.get_device_properties(0).total_memory / 2**30
@@ -95,7 +100,7 @@ def main():
     model.print_trainable_parameters()
 
     train, val = Rows(args.data, "train"), Rows(args.data, "val")
-    collator = Collator(processor)
+    collator = Collator(processor, SYSTEM_PROMPTS[args.schema])
     sample = collator([train[0]])
     n_ans = int((sample["labels"][0] != -100).sum())
     print(f"train {len(train)}, val {len(val)} | 예시: 전체 {sample['input_ids'].shape[1]} 토큰 중 답변 {n_ans} 토큰만 학습")

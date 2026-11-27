@@ -26,6 +26,10 @@ from .vlm_scene_cfg import BOX_COLORS, HIDDEN_POS, STAND_NAMES, STAND_X
 # 높이는 손가락 끝(palm 원점보다 약 9cm 아래)이 판 위에 이미 놓인 상자의 윗면을 넘도록 정한다 (다른 판에 상자가 있는 채로 받침대에 다가가므로)
 CARRY_GAP = 0.10
 CARRY_POSE = (0.28, SMALL_BOX_SIZE[1] / 2 + CARRY_GAP, 0.38)
+# 든 자세의 팔 관절 목표값 (왼팔 어깨 pitch·roll·yaw, 팔꿈치 pitch·roll, 오른팔 같은 순서): 내려놓기 시범 200개의 첫 스텝 목표값 평균.
+# 시범에서는 기본 자세에서 IK 로 CARRY_POSE 에 가므로 이 값이 거의 한 점에 모인다 (관절별 표준편차 0.01 rad 이하).
+# 다른 자세에서 IK 로 같은 손 위치에 가면 관절값이 달라져 모델이 처음 보는 상태가 되므로, 집은 뒤에는 이 관절값으로 직접 옮긴다
+CARRY_Q = (-1.075, 0.361, 0.029, 0.272, 0.009, -1.053, -0.384, -0.035, 0.259, -0.010)
 BOX_REST_Z = PAD_TOP_Z + SMALL_BOX_SIZE[2] / 2  # 판 위에 놓인 상자 중심 높이
 PLACE_OK_XY = 0.05  # 성공: 상자 중심이 판 가운데에서 수평으로 이 거리(m) 안
 PLACE_OK_Z = 0.015  # 높이가 놓인 높이에서 이만큼 안

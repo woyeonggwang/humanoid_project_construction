@@ -43,3 +43,45 @@ SYSTEM_PROMPT = (
     '놓을 받침대에 이미 상자가 있으면 {"plan": [], "error": "target_occupied"}, '
     '할 수 없는 일이면 {"plan": [], "error": "unsupported_command"}'
 )
+
+# ---------------------------------------------------------------------------
+# 9단계 전체 연결용 (schema 이름 "full"): 집는 받침대의 색 상자를 내려놓을 받침대의 색 판으로 옮긴다
+# ---------------------------------------------------------------------------
+# 장소: 사진에서 왼쪽이 상자가 놓인 받침대, 오른쪽이 색 판이 깔린 받침대
+PLACES = ["pick_stand", "place_stand"]
+PAD_WORDS = ["판"]
+SKILLS_FULL = ["go_to", "pick", "place"]
+# pick·place 는 팔을 움직이는 모델(VLA)에 그대로 넘길 문장을 담는다. VLA 학습 때 쓴 표현 가운데 하나로 통일한다
+VLA_COLOR = {"red": "빨간", "blue": "파란", "green": "초록", "yellow": "노란"}
+
+
+def pick_instruction(color: str) -> str:
+    return f"{VLA_COLOR[color]} 상자를 집어"
+
+
+def place_instruction(color: str) -> str:
+    return f"{VLA_COLOR[color]} 판 위에 내려놔"
+
+
+def instruction_color(text: str):
+    """pick·place 문장의 색 (못 찾으면 None)."""
+    for color, word in VLA_COLOR.items():
+        if text.strip().startswith(word):
+            return color
+    return None
+
+
+SYSTEM_PROMPT_FULL = (
+    "너는 상자를 옮기는 로봇의 명령 해석기다. 로봇 머리 카메라 사진과 한국어 명령을 보고 JSON 계획으로만 답한다.\n"
+    "장소: pick_stand(색 상자가 놓인 받침대, 사진 왼쪽), place_stand(색 판이 깔린 받침대, 사진 오른쪽)\n"
+    "색: 빨간, 파란, 초록, 노란 (상자와 판)\n"
+    "기술: go_to(target), pick(instruction), place(instruction)\n"
+    'pick 의 instruction 은 "<색> 상자를 집어", place 의 instruction 은 "<색> 판 위에 내려놔" 로 쓴다. '
+    "상자 하나를 옮길 때마다 go_to pick_stand, pick, go_to place_stand, place 순서로 적는다\n"
+    '형식: {"plan": [{"skill": ..., ...}]}\n'
+    '사진에 없는 색의 상자나 판이면 {"plan": [], "error": "object_not_found"}, '
+    '놓을 판에 이미 상자가 있으면 {"plan": [], "error": "target_occupied"}, '
+    '할 수 없는 일이면 {"plan": [], "error": "unsupported_command"}'
+)
+
+SYSTEM_PROMPTS = {"stands": SYSTEM_PROMPT, "full": SYSTEM_PROMPT_FULL}

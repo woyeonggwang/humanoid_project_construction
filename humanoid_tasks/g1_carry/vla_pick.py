@@ -349,6 +349,12 @@ class BoxGroup:
         self.data = self  # 상태 머신은 box.data.root_pos_w·root_quat_w 를 읽음
         self.root_physx_view = self  # box.root_physx_view.get_masses()
 
+    def set_color(self, env_i: int, color: str):
+        """환경 env_i 가 다루는 상자를 바꾼다 (여러 상자를 차례로 옮길 때)."""
+        self.colors[env_i] = color
+        for c, m in self.masks.items():
+            m[env_i] = c == color
+
     def _gather(self, name: str) -> torch.Tensor:
         out = None
         for c, m in self.masks.items():

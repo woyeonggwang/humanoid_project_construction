@@ -19,6 +19,8 @@ portfolio/
 
 # ── VLM 데이터·모델 (사진과 모델은 용량이 커서 올리지 않음. 생성·학습 명령은 CLAUDE.md) ──
 vlm/data/images/
+vlm/data_full/images/
+vlm/data_full_small/
 vlm/data_small/
 vlm/outputs/
 vlm/unsloth_compiled_cache/

@@ -21,6 +21,7 @@ import time
 import torch
 
 from common import extract_json, generate, load_image, load_model, normalize
+from schema import SYSTEM_PROMPTS
 
 
 def summarize(rows) -> str:
@@ -49,6 +50,8 @@ def main():
     ap.add_argument("--split", default="test")
     ap.add_argument("--limit", type=int, default=None, help="앞뒤에서 반씩 N개만 평가")
     ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--schema", choices=list(SYSTEM_PROMPTS), default="stands", help="명령 체계 (학습 때와 같은 것)")
+    ap.add_argument("--max_new_tokens", type=int, default=128, help="생성할 최대 토큰 수 (full 의 두 쌍 계획은 길어서 320 을 씀)")
     args = ap.parse_args()
 
     rows = [json.loads(line) for line in open(os.path.join(args.data, f"{args.split}.jsonl"), encoding="utf-8")]
@@ -64,7 +67,8 @@ def main():
     for i in range(0, len(rows), args.batch):
         batch = rows[i:i + args.batch]
         images = [load_image(os.path.join(args.data, r["image"])) for r in batch]
-        outs = generate(model, processor, images, [r["input"] for r in batch])
+        outs = generate(model, processor, images, [r["input"] for r in batch], max_new_tokens=args.max_new_tokens,
+                        system=SYSTEM_PROMPTS[args.schema])
         for r, gen in zip(batch, outs):
             pred = extract_json(gen)
             r["raw"] = gen
@@ -84,17 +88,24 @@ def main():
     print("전체          :", summarize(rows))
     print("본 패턴       :", summarize([r for r in rows if not r.get("heldout")]))
     print("처음 보는 패턴:", summarize([r for r in rows if r.get("heldout")]))
-    need_image = {"move", "move_wait", "pick", "goto_box", "move_to_empty", "place"}
-    print("사진을 봐야 하는 명령:", acc([r for r in rows if r["template"] in need_image]),
-          "| 사진 없이 되는 명령:", acc([r for r in rows if r["template"] not in need_image]))
     print("거부 종류별   :", ", ".join(
         f"{e} {acc([r for r in rows if json.loads(r['output']).get('error') == e])}"
         for e in ("object_not_found", "target_occupied", "unsupported_command")))
-    print("상자 색별     :", ", ".join(f"{c} {acc([r for r in rows if r.get('color') == c])}"
-                                      for c in ("red", "blue", "green", "yellow")))
-    print("상자가 놓인 받침대별:", ", ".join(f"{s} {acc([r for r in rows if r.get('src') == s])}"
-                                            for s in ("stand_L", "stand_C", "stand_R")),
-          "| 사진에 없는 상자", acc([r for r in rows if "color" in r and r.get("src") is None]))
+    if args.schema == "stands":
+        need_image = {"move", "move_wait", "pick", "goto_box", "move_to_empty", "place"}
+        print("사진을 봐야 하는 명령:", acc([r for r in rows if r["template"] in need_image]),
+              "| 사진 없이 되는 명령:", acc([r for r in rows if r["template"] not in need_image]))
+        print("상자 색별     :", ", ".join(f"{c} {acc([r for r in rows if r.get('color') == c])}"
+                                          for c in ("red", "blue", "green", "yellow")))
+        print("상자가 놓인 받침대별:", ", ".join(f"{s} {acc([r for r in rows if r.get('src') == s])}"
+                                                for s in ("stand_L", "stand_C", "stand_R")),
+              "| 사진에 없는 상자", acc([r for r in rows if "color" in r and r.get("src") is None]))
+    else:
+        print("결과별 (옮기기·집기): ", ", ".join(
+            f"{o} {acc([r for r in rows if r['template'] in ('move1', 'move2', 'pick') and r.get('outcome') == o])}"
+            for o in ("ok", "not_found", "occupied")))
+        print("처음 보는 패턴의 템플릿별:", ", ".join(
+            f"{t} {acc([r for r in rows if r['template'] == t and r.get('heldout')])}" for t in sorted({r["template"] for r in rows})))
     print("템플릿별      :", ", ".join(f"{t} {acc([r for r in rows if r['template'] == t])}"
                                       for t in sorted({r["template"] for r in rows})))
     wrong = [r for r in rows if not r["correct"]][:4]
