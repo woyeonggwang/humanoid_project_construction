@@ -47,7 +47,8 @@ parser.add_argument("--checkpoint", type=str, default="model_.*.pt")
 parser.add_argument("--seed", type=int, default=7000)
 parser.add_argument("--out", type=str, default=None, help="결과 JSON 을 저장할 파일")
 parser.add_argument("--video", action="store_true", help="환경 0 을 녹화 (num_envs 1, 시나리오 하나로)")
-parser.add_argument("--view", choices=["side", "top"], default="side")
+parser.add_argument("--view", choices=["side", "top", "site", "site_top"], default="side",
+                    help="site·site_top 은 10단계 공사장 장면용 (넓게 비스듬히 / 위에서, 아래쪽 자막 자리를 비움)")
 parser.add_argument("--video_dir", type=str, default=os.path.join("data", "vla_full", "videos"))
 parser.add_argument("--name", type=str, default="vla_full")
 AppLauncher.add_app_launcher_args(parser)
@@ -149,8 +150,9 @@ env_cfg.seed = args_cli.seed
 if args_cli.video:
     env_cfg.viewer.origin_type = "env"
     env_cfg.viewer.env_index = 0
-    env_cfg.viewer.eye = (0.6, -4.4, 2.0) if args_cli.view == "side" else (0.95, -0.02, 5.4)
-    env_cfg.viewer.lookat = (1.05, 0.0, 0.65) if args_cli.view == "side" else (0.95, 0.0, 0.0)
+    views = {"side": ((0.6, -4.4, 2.0), (1.05, 0.0, 0.65)), "top": ((0.95, -0.02, 5.4), (0.95, 0.0, 0.0)),
+             "site": ((7.2, -6.2, 4.6), (-0.6, 0.6, 0.4)), "site_top": ((0.2, -0.92, 8.8), (0.2, -0.9, 0.0))}
+    env_cfg.viewer.eye, env_cfg.viewer.lookat = views[args_cli.view]
     env_cfg.viewer.resolution = (1280, 720)
 agent_cfg = load_cfg_from_registry(args_cli.task, "rsl_rl_cfg_entry_point")
 log_root = os.path.abspath(os.path.join("logs", "rsl_rl", agent_cfg.experiment_name))

@@ -179,7 +179,8 @@ else:
     set_lighting(dome_intensity=1000.0, sun_intensity=1800.0, sun_elevation_deg=55.0, sun_azimuth_deg=30.0)
     fx, fy = sl.STEEL_FRAME_POS[:2]
     views = {  # 이름: (눈, 보는 곳)
-        "top": ((-4.0, -1.5, 19.0), (-4.0, 0.0, 0.0)),
+        "top": ((-1.0, -1.5, 24.0), (-1.0, 0.0, 0.0)),
+        "robot_eye_front": ((-0.5, 0.0, 1.6), (6.0, 0.0, 0.8)),
         "front_high": ((7.5, -7.0, 6.5), (-3.5, 0.5, 0.8)),
         "back_high": ((-13.5, 8.5, 7.0), (-3.0, -0.5, 0.8)),
         "steel_frame": ((fx + 4.2, fy - 2.2, 1.8), (fx, fy, 1.0)),
@@ -190,8 +191,13 @@ else:
         "robot_eye_back": ((0.0, 0.0, 1.5), (-5.0, 0.0, 1.0)),
     }
     os.makedirs(args_cli.out, exist_ok=True)
+    o = u.scene.env_origins[0].tolist()  # 사진의 자리는 환경 원점 기준
+    for _ in range(30):  # 렌더가 자리 잡을 때까지 (처음 몇 장은 검게 나옴)
+        vf.apply_scenes(u, [sc])
+        env.step(zero)
+        env.render()
     for name, (eye, target) in views.items():
-        u.sim.set_camera_view(eye=eye, target=target)
+        u.sim.set_camera_view(eye=tuple(a + b for a, b in zip(eye, o)), target=tuple(a + b for a, b in zip(target, o)))
         for _ in range(8):
             vf.apply_scenes(u, [sc])
             env.step(zero)

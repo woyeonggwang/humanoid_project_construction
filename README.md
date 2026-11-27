@@ -29,12 +29,14 @@ pick·place  → 팔 = VLA (머리 카메라 사진 + 팔 상태 + 단계의 한
 | 7 | VLM 판단 층 | 사진 + 한국어 명령 → 기술 순서 JSON |
 | 8 | VLA 상체 제어 | 머리 카메라 사진 + 팔 상태 + 한국어 명령 → 팔 관절 목표값과 잡기 신호 (SmolVLA 미세조정) |
 | 9 | 내려놓기도 VLA 로, 전체 연결 | 집기와 내려놓기를 한 VLA 모델로 (명령한 색의 상자를 집고, 명령한 색의 판 위에 내려놓기). 한국어 명령 → VLM 이 단계로 나눔 → 걷기 정책 + VLA 로 상자 하나·둘 옮기기 |
+| 10 | 공사장 장면 | 직접 만든 공사장 모델(펜스·자재 더미·철골·비계·사무실)을 장면에 배치. 로봇의 카메라에 보이지 않는 곳에 두면 9단계 성능이 그대로임을 확인 |
 
 단계별 설계 결정, 결과 표, 시행착오는 [CLAUDE.md](CLAUDE.md) 에 있습니다.
 
 ## 폴더
 
-- `humanoid_tasks/g1_carry/` — 과제 설정 (환경, 보상·이벤트, IK, 상자 집어 옮기기 상태 머신, VLM·VLA 장면)
+- `assets/` — 공사장 장면 모델 (USD 13개)과 철골의 용접선 좌표
+- `humanoid_tasks/g1_carry/` — 과제 설정 (환경, 보상·이벤트, IK, 상자 집어 옮기기 상태 머신, VLM·VLA 장면, 공사장 장면)
 - `scripts/` — 학습·평가·녹화·데이터 생성·데모 실행 (전체 연결 실행기는 `vla_full_eval.py`)
 - `vlm/` — VLM 판단 층 (명령 체계, 문장 템플릿, 파인튜닝, 평가, 실행용 작업자)
 - `vla/` — VLA 상체 제어 (시범 데이터 변환·합치기, SmolVLA 미세조정, 행동 출력 작업자, 명령 바꿔치기 시험, 메모리 측정)
@@ -100,10 +102,20 @@ python scripts\vla_full_eval.py --headless --mode vla --ckpt data\vla_place\trai
 python scripts\vla_full_eval.py --headless --mode script --plans_from data\vla_full\plans.json --out data\vla_full\eval_script.json
 ```
 
+공사장 장면 (9단계 전체 연결 장면에 공사장 모델을 더한 것. 점검과 같은 평가를 과제 이름만 바꿔 실행):
+
+```
+python scripts\site_check.py --headless --mode overview --task Humanoid-G1-Site-A-v0 --out data\site\overview
+python scripts\site_check.py --headless --mode cameras --task Humanoid-G1-Site-A-v0 --out data\site\cam_site_a
+python scripts\vla_full_eval.py --headless --task Humanoid-G1-Site-A-v0 --mode vla --ckpt data\vla_place\train\joint_14k\checkpoints\last\pretrained_model --out data\site\eval_a.json
+python scripts\site_intro_video.py --headless --task Humanoid-G1-Site-A-v0 --out portfolio\g1_site_intro.mp4
+```
+
 ## 모델과 데이터
 
 - **VLM**: [Qwen3.5-0.8B](https://huggingface.co/Qwen/Qwen3.5-0.8B) 를 LoRA 로 파인튜닝해 씁니다. 모델 카드에 표기된 라이선스는 Apache License 2.0 입니다. 모델 가중치와 학습한 어댑터는 이 저장소에 들어 있지 않습니다.
 - **VLM 학습 데이터**: 모두 이 프로젝트에서 만든 합성 데이터입니다. 사진은 Isaac Lab 장면(7단계: 받침대 3개와 색 상자, 9단계: 상자 받침대와 색 판 받침대)을 로봇 머리 카메라로 찍은 것이고, 명령 문장과 정답 JSON 은 `vlm/templates.py`·`vlm/templates_full.py` 의 템플릿이 장면의 실제 상태로부터 자동으로 만듭니다. 외부 데이터셋은 쓰지 않았습니다. 사진은 용량이 커서 저장소에 올리지 않고, `scripts/make_vlm_data.py`·`scripts/make_vlm_full_data.py` 를 같은 시드로 실행하면 같은 장면·문장으로 다시 만들 수 있습니다.
 - **VLA**: [SmolVLA](https://huggingface.co/lerobot/smolvla_base) (`lerobot/smolvla_base`, 4.5억 파라미터)를 [LeRobot](https://github.com/huggingface/lerobot) 으로 미세조정해 씁니다. 모델 카드에 표기된 라이선스는 Apache License 2.0 이고, 바탕이 되는 VLM(SmolVLM2-500M-Video-Instruct)도 Apache License 2.0 입니다. LeRobot 코드도 Apache License 2.0 입니다. 가중치와 학습한 체크포인트는 이 저장소에 들어 있지 않습니다.
 - **VLA 시범 데이터**: 이 프로젝트의 상자 집기 스크립트(상태 머신 + IK)를 Isaac Lab 에서 돌려 자동으로 모은 합성 데이터입니다 (머리 카메라 영상, 팔 관절 위치·목표값, 잡기 신호, 한국어 명령. 집기와 내려놓기). 외부 데이터셋은 쓰지 않았고, 용량이 커서 저장소에 올리지 않습니다.
+- **장면 모델**: 공사장 장면의 모델(`assets/usd/`, 펜스·안전 고깔·바리케이드·자재 더미·철골·비계·사무실·바닥)은 직접 제작(Blender)했습니다. 외부 모델·텍스처는 쓰지 않았습니다.
 - **로봇 모델**: Isaac Lab 에 들어 있는 Unitree G1 설정을 상속해 씁니다.

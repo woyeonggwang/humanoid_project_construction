@@ -18,7 +18,7 @@ import math
 import torch
 
 import isaaclab.sim as sim_utils
-from isaaclab.sim.utils import create_prim
+from isaaclab.sim.utils import create_prim, get_current_stage
 from isaaclab.terrains import TerrainImporter, TerrainImporterCfg
 from isaaclab.utils import configclass
 
@@ -38,10 +38,12 @@ def _yaw_quat(yaw_deg: float):
 
 def spawn_site(env_origins, placements, z: float = 0.0, collide: bool = True) -> None:
     """환경 원점마다 placements [(이름, 모델, (x, y), yaw 도)] 를 불러온다. 모델은 <SITE_ROOT>/env_<i>/<이름>, 충돌 상자는 <이름>_col<k>."""
-    create_prim(SITE_ROOT, "Xform")
+    stage = get_current_stage()
     for i, origin in enumerate(env_origins.tolist()):
         root = f"{SITE_ROOT}/env_{i}"
-        create_prim(root, "Xform")
+        for path in (SITE_ROOT, root):  # 묶음을 여러 번 놓을 수 있으므로 없을 때만 만든다
+            if not stage.GetPrimAtPath(path).IsValid():
+                create_prim(path, "Xform")
         for name, model, xy, yaw in placements:
             usd_cfg = sim_utils.UsdFileCfg(usd_path=sl.model_path(model))
             usd_cfg.func(f"{root}/{name}", usd_cfg, translation=(origin[0] + xy[0], origin[1] + xy[1], origin[2] + z),
