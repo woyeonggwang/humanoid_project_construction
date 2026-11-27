@@ -124,7 +124,7 @@ cd vlm
 python train.py --schema site --data data_site --out outputs/qwen35_08b_site
 python evaluate.py --model Qwen/Qwen3.5-0.8B --adapter outputs/qwen35_08b_site/lora --name ft_08b_site --data data_site --schema site --max_new_tokens 320
 cd ..
-python scripts\vla_full_eval.py --headless --schema site --mode vla --ckpt data\vla_place\train\joint_14k\checkpoints\last\pretrained_model --n_one 0 --n_two 0 --n_weld1 12 --n_weldn 8 --n_move_weld 14 --n_refuse 12 --out data\weld\eval_full.json
+python scripts\vla_full_eval.py --headless --schema site --task Humanoid-G1-Weld-B2-v0 --mode vla --ckpt data\vla_place\train\joint_14k\checkpoints\last\pretrained_model --n_one 0 --n_two 0 --n_weld1 12 --n_weldn 8 --n_move_weld 14 --n_refuse 12 --out data\weld\eval_full.json
 ```
 
 ## 모델과 데이터
