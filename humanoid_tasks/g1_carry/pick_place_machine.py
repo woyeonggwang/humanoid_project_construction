@@ -171,6 +171,8 @@ class PickPlaceMachine:
         self.q_cmd_min_state = torch.full((10,), S_IDLE, dtype=torch.long, device=dev)
         self.q_cmd_max_state = torch.full((10,), S_IDLE, dtype=torch.long, device=dev)
         self.t_start = z(n, dtype=torch.long)
+        # 멈춘 자리 허용 범위 (환경마다: 앞 오차 하한·상한, 좌우, 방향). 용접처럼 더 정확히 서야 하는 작업이 그 환경의 값만 바꿔 쓴다
+        self.stance_tol = torch.tensor([STANCE_TOL_X[0], STANCE_TOL_X[1], STANCE_TOL_Y, STANCE_TOL_YAW], device=dev).repeat(n, 1)
 
     # ------------------------------------------------------------------ 시작
     def start(self, box, src_xy: torch.Tensor, src_yaw: torch.Tensor, dst_xy: torch.Tensor, dst_yaw: torch.Tensor,
@@ -533,7 +535,8 @@ class PickPlaceMachine:
         return cmd, arrived, ex, ey, yaw_err
 
     def _stance_ok(self, ex, ey, yerr):
-        return (ex >= STANCE_TOL_X[0]) & (ex <= STANCE_TOL_X[1]) & (ey.abs() <= STANCE_TOL_Y) & (yerr.abs() <= STANCE_TOL_YAW)
+        tol = self.stance_tol
+        return (ex >= tol[:, 0]) & (ex <= tol[:, 1]) & (ey.abs() <= tol[:, 2]) & (yerr.abs() <= tol[:, 3])
 
     # ------------------------------------------------------------------ 매 스텝
     @property
