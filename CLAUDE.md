@@ -47,7 +47,7 @@ humanoid_project/
   - Isaac Lab 위치는 환경 변수 ISAACLAB_PATH, 없으면 설치된 isaaclab 패키지 위치에서 계산
   - gym.register 는 Isaac Sim 앱이 켜지기 전에 실행되므로 설정 위치를 문자열로만 넘기고 isaaclab 모듈은 import 하지 않음 (앱 전 import 시 오류 여부는 확인 필요)
 - 원격 저장소: https://github.com/woyeonggwang/humanoid_project_construction (2026-11-19 구성, `main` 브랜치). 커밋 전 개인정보(로컬 경로·PC 사양·이메일) 검사
-- 브랜치: `main` = 8단계 2차(VLA 색 구분)까지 (2026-11-26 `vla_pick` 을 fast-forward 로 합침. 그 전의 `main` 은 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지였고 커밋 `b1b20da`, 2026-11-20 `gait_reward` 를 합친 것. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22), `vlm_planner` = `loco_v2` 에서 갈라져 VLM 판단 층 (7단계, 2026-11-22). `vla_probe` = `vlm_planner` 에서 갈라져 VLA 조사 (8단계 준비, 2026-11-23), `vla_pick` = `vla_probe` 에서 갈라져 VLA 상체 제어 (8단계, 2026-11-23). 이 둘은 2026-11-26 원격에 올림. `vla_place_full` = `main` 에서 갈라져 내려놓기 VLA 와 전체 연결 (9단계, 2026-11-26, push·main 병합은 하지 않음. 1번 내려놓기 VLA 와 2번 전체 연결까지 함), `construction_scene` = `vla_place_full` 에서 갈라져 공사장 장면 (10단계, 2026-11-27, push·main 병합은 하지 않음). `pick_place`·`loco_v2`·`vlm_planner` 는 2026-11-23 원격에 올림 (main 병합은 하지 않음)
+- 브랜치: `main` = 10단계(공사장 장면)까지 (2026-11-27 `vla_place_full`, `construction_scene` 을 차례로 fast-forward 로 합치고 세 브랜치를 원격에 올림. 충돌 없음. 병합 뒤 main 에서 9단계 전체 연결 평가를 작게 돌려 확인: 상자 하나 4/4, 둘 4/4, 넘어짐 0. 그 전의 `main` 은 8단계 2차(VLA 색 구분)까지였고 커밋 `575458f`, 2026-11-26 `vla_pick` 을 fast-forward 로 합친 것. 그보다 앞의 `main` 은 짐 든 채 걷기 + 사람에 가까운 걸음 보상(12차 설정)까지였고 커밋 `b1b20da`, 2026-11-20 `gait_reward` 를 합친 것. 짐 든 채 걷기만 있던 판은 커밋 `bc138b3`), `gait_reward` = `main` 에서 갈라져 사람에 가까운 걸음 보상을 추가한 작업 (3단계), `arm_rand` = `gait_reward` 에서 갈라져 팔이 움직여도 버티는 걷기·서기 (4단계 준비, 아래 "4단계 준비"), `pick_place` = `arm_rand` 에서 갈라져 상자 집어 옮기기 (5단계, 2026-11-22. push·main 병합은 하지 않음), `loco_v2` = `pick_place` 에서 갈라져 걷기 정책 v2 (6단계, 2026-11-22), `vlm_planner` = `loco_v2` 에서 갈라져 VLM 판단 층 (7단계, 2026-11-22). `vla_probe` = `vlm_planner` 에서 갈라져 VLA 조사 (8단계 준비, 2026-11-23), `vla_pick` = `vla_probe` 에서 갈라져 VLA 상체 제어 (8단계, 2026-11-23). 이 둘은 2026-11-26 원격에 올림. `vla_place_full` = `main` 에서 갈라져 내려놓기 VLA 와 전체 연결 (9단계, 2026-11-26. 1번 내려놓기 VLA 와 2번 전체 연결까지 함), `construction_scene` = `vla_place_full` 에서 갈라져 공사장 장면 (10단계, 2026-11-27). `pick_place`·`loco_v2`·`vlm_planner` 는 2026-11-23 원격에 올림 (main 병합은 하지 않음)
 - .gitignore: `portfolio/`, `logs/`, `outputs/`, `__pycache__/`, `*.pt`, `data/`(VLA 시범·학습 결과), `vlm/data/images/`, `vlm/data_full/images/`, `vlm/outputs/` (`outputs/` 규칙에 함께 걸림), `vlm/unsloth_compiled_cache/`
   - `outputs/`: train.py·play.py 실행 때 Hydra 가 실행 위치에 만드는 실행 기록. hydra.yaml 에 실행 폴더의 절대 경로가 들어가므로 올리지 않음
   - `logs/`: 체크포인트·영상이 커서 올리지 않음
@@ -1950,7 +1950,7 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
 ## 10단계: 공사장 장면 (`construction_scene` 브랜치, 2026-11-27~)
 - 목적: 직접 만든 공사장 모델(Blender 로 제작, USD 13개)을 9단계 전체 연결 장면에 넣는다. 모델은 이미 만들어져 있고 이 단계에서는 불러와 배치만 한다
 - 가장 중요한 제약: VLA(머리 카메라, 시야 70°)와 VLM(넓은 카메라)은 9단계 장면의 모습으로 학습됐다 → 받침대·상자·판은 그대로 두고, 새 모델은 먼저 두 카메라에 보이지 않는 곳에만 두고(A), 카메라에 보이는 변경은 성능을 다시 잰 뒤 정한다(B). 로봇이 걷는 바닥의 물리(높이·마찰)는 바꾸지 않는다
-- 브랜치: `construction_scene`. 지시는 `main` 에서 가르는 것이었으나 9단계 장면·실행기가 `vla_place_full` 에만 있어(main 에 합치지 않았음) **`vla_place_full` 에서 갈랐다**. push·main 병합은 하지 않음
+- 브랜치: `construction_scene`. 지시는 `main` 에서 가르는 것이었으나 9단계 장면·실행기가 `vla_place_full` 에만 있어(main 에 합치지 않았음) **`vla_place_full` 에서 갈랐다**. 2026-11-27 `vla_place_full` 다음에 main 에 합치고 원격에 올림
 - 파일
   - `assets/usd/*.usda`(모델 13개), `assets/weld_seams.json`(용접선 좌표)
   - `humanoid_tasks/g1_carry/site_layout.py`: 모델 크기, 놓는 자리(A·B), 단순 상자 충돌, 철골 자리, 용접선을 월드 좌표로 바꾸는 함수. isaaclab 을 import 하지 않음 (다음 단계의 용접 작업도 같이 쓸 수 있게)
@@ -2131,7 +2131,6 @@ pip install --force-reinstall --no-deps torchaudio==2.7.0 --index-url https://do
   - 쓰지 않는 7단계 받침대·상자·판은 뒤쪽 30~35m 에 그대로 있음 (펜스 밖. 넓게 찍은 영상에는 멀리 보일 수 있음)
   - 바닥 겉모습(콘크리트)은 1cm 띄워 깔았고 사진에서는 깜빡임이 없었으나 영상으로는 확인하지 않음. 흙 바닥(`SM_Floor_Dirt`)은 불러와 보지 않음
   - 철골 앞까지 걷는 것은 소개 영상에서 한 번 봄 (명령을 직접 줌). 용접 자세·팔이 닿는 범위는 다음 단계
-  - 브랜치를 `main` 이 아니라 `vla_place_full` 에서 갈랐음 (9단계가 main 에 없어서). 용접 작업 브랜치와 합칠 때 순서를 정해야 함
 - 9단계 (내려놓기 VLA 와 전체 연결)
   - 전체 연결 평가는 종류마다 24개(거부 12개), 시드 하나. 옮기기 시나리오의 장면은 '상자 2개, 판은 둘 다 빔' 한 가지 (상자가 처음부터 하나뿐이거나 판 하나가 찬 채 시작하는 옮기기는 넣지 않음)
   - VLA 의 시작 자세가 시범과 다르면 동작하지 않음: 든 자세의 관절값을 시범 평균(`CARRY_Q`)에 맞추기 전에는 내려놓기 0/8. 시작 자세를 흩어 모은 시범으로는 해 보지 않음
